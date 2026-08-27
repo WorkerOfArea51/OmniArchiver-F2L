@@ -135,14 +135,15 @@ async def batch_command(_, msg: Message):
     # Use the episodes from batch_doc in case it was already indexed
     final_episodes = batch_doc.get('episodes', episodes_list)
 
-    # Format output with quote blocks directly in Telegram chat
-    message_chunks = []
-    current_chunk = (
+    # Format output as a single continuous blockquote with full copyable URLs
+    header = (
         f"✅ **Batch Indexing Completed!**\n\n"
         f"📁 **Category:** `{category.upper()}`\n"
-        f"📦 **Total Episodes:** `{len(final_episodes)}`\n"
-        f"🗄️ **Saved as 1 Unified Batch Document in MongoDB**\n\n"
+        f"📦 **Total Episodes:** `{len(final_episodes)}`\n\n"
     )
+
+    message_chunks = []
+    current_chunk = header
 
     for item in final_episodes:
         human_size = get_human_size(item['file_size'])
@@ -151,20 +152,21 @@ async def batch_command(_, msg: Message):
         stream_link = f"{Server.BASE_URL}/stream/{code}"
         
         entry = (
-            f"🎬 **{item['file_name']}** `({human_size})`\n"
-            f"> ▶️ [Stream Link]({stream_link})\n"
-            f"> 📥 [Download Link]({dl_link})\n\n"
+            f"> 🎬 **{item['file_name']}** `({human_size})`\n"
+            f"> ▶️ **Stream:** `{stream_link}`\n"
+            f"> 📥 **Download:** `{dl_link}`\n"
+            f">\n"
         )
 
-        # Telegram message limit is 4096 chars; split if approaching limit
+        # Telegram message limit is 4096 chars; split into chunks if approaching limit
         if len(current_chunk) + len(entry) > 3800:
-            message_chunks.append(current_chunk)
+            message_chunks.append(current_chunk.rstrip(">\n"))
             current_chunk = entry
         else:
             current_chunk += entry
 
     if current_chunk.strip():
-        message_chunks.append(current_chunk)
+        message_chunks.append(current_chunk.rstrip(">\n"))
 
     # Edit the initial status message with the first batch chunk
     await status_msg.edit_text(message_chunks[0], disable_web_page_preview=True)
@@ -173,26 +175,3 @@ async def batch_command(_, msg: Message):
     for follow_up in message_chunks[1:]:
         await msg.reply(follow_up, quote=False, disable_web_page_preview=True)
         await asyncio.sleep(0.5)
-
-    # Build and send text file list as backup
-    txt_content = f"=== OmniArchiver Batch Links ({category.upper()}) ===\nTotal Files: {len(final_episodes)}\n\n"
-    for item in final_episodes:
-        human_size = get_human_size(item['file_size'])
-        code = item['code']
-        dl_link = f"{Server.BASE_URL}/dl/{code}"
-        stream_link = f"{Server.BASE_URL}/stream/{code}"
-        txt_content += (
-            f"File: {item['file_name']} ({human_size})\n"
-            f"Stream: {stream_link}\n"
-            f"Download: {dl_link}\n"
-            f"{'-'*50}\n"
-        )
-
-    file_bytes = io.BytesIO(txt_content.encode('utf-8'))
-    file_bytes.name = f"batch_{category}_{start_id}_to_{end_id}.txt"
-    
-    await msg.reply_document(
-        document=file_bytes,
-        caption=f"📁 **Batch Text List** ({category.upper()}) - `{len(final_episodes)} files`",
-        quote=False
-    )
