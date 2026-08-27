@@ -57,17 +57,23 @@ async def start_services():
     app = setup_web_server()
     runner = web.AppRunner(app)
     await runner.setup()
-    try:
-        site = web.TCPSite(runner, host=Config.BIND_ADDRESS, port=Config.PORT)
-        await site.start()
-    except Exception as e:
-        logger.warning(f"Failed binding to {Config.BIND_ADDRESS}:{Config.PORT} ({e}). Falling back to 0.0.0.0:{Config.PORT}")
-        site = web.TCPSite(runner, host="0.0.0.0", port=Config.PORT)
+    # 4. Start Dual-Stack (IPv4 & IPv6) Web Server for 100% Reverse Proxy Compatibility
+    bound_any = False
+    for host in ["0.0.0.0", "::", "127.0.0.1"]:
+        try:
+            site = web.TCPSite(runner, host=host, port=Config.PORT)
+            await site.start()
+            logger.info(f"🌐 Web Server bound to: http://{host}:{Config.PORT}")
+            bound_any = True
+        except Exception as e:
+            logger.debug(f"Host bind {host}:{Config.PORT} skipped ({e})")
+
+    if not bound_any:
+        site = web.TCPSite(runner, port=Config.PORT)
         await site.start()
 
-    logger.info(f"?? Web Server listening at: http://{Config.BIND_ADDRESS}:{Config.PORT}")
-    logger.info(f"? Public Endpoint URL: {Config.BASE_URL}")
-    logger.info("?? OmniArchiver F2L is ready to stream!")
+    logger.info(f"🚀 Public Endpoint URL: {Config.BASE_URL}")
+    logger.info("✨ OmniArchiver F2L is ready to stream & download!")
 
     # 5. Keep services running
     stop_event = asyncio.Event()
