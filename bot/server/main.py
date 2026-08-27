@@ -13,6 +13,11 @@ bp = Blueprint('main', __name__)
 async def home():
     return redirect(f'https://t.me/{Telegram.BOT_USERNAME}')
 
+@bp.route('/ping')
+@bp.route('/health')
+async def health_check():
+    return "OK", 200
+
 @bp.route('/dl/<string:file_code>')
 async def transmit_file(file_code):
     # Lookup file record in MongoDB
