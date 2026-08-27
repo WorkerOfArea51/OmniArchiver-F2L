@@ -3,17 +3,35 @@ import os
 import sys
 import fcntl
 
-# Enforce strictly 1 running instance across the entire server
+# Enforce strictly 1 running instance with self-healing PID verification
 _lock_file = None
 def ensure_single_instance():
     global _lock_file
     lock_path = os.path.join(os.path.expanduser("~"), ".omni_bot_singleton.lock")
-    _lock_file = open(lock_path, "w")
     try:
+        _lock_file = open(lock_path, "a+")
         fcntl.flock(_lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        _lock_file.seek(0)
+        _lock_file.truncate()
+        _lock_file.write(str(os.getpid()))
+        _lock_file.flush()
     except (IOError, OSError):
-        print("⚠️ Duplicate instance detected! Another bot process is already active. Exiting cleanly.")
-        sys.exit(0)
+        # Check if the process holding the lock is actually alive
+        try:
+            with open(lock_path, "r") as f:
+                old_pid = int(f.read().strip())
+            os.kill(old_pid, 0)
+            print(f"⚠️ Process {old_pid} is already running active. Exiting duplicate.")
+            sys.exit(0)
+        except Exception:
+            # Stale lock from killed process - override safely
+            try:
+                _lock_file = open(lock_path, "w")
+                fcntl.flock(_lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                _lock_file.write(str(os.getpid()))
+                _lock_file.flush()
+            except Exception:
+                pass
 
 ensure_single_instance()
 
