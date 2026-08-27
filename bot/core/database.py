@@ -7,7 +7,7 @@ from bot.core.config import Config
 logger = logging.getLogger(__name__)
 
 class DatabaseManager:
-    """Async Database Layer supporting multi-channel indexing, full-text search, and batch grouping."""
+    """Async Database Layer supporting multi-channel indexing, arc/saga grouping, and full-text search."""
 
     def __init__(self):
         self.is_mongo = bool(Config.DATABASE_URL.startswith("mongodb"))
@@ -38,6 +38,7 @@ class DatabaseManager:
                         mime_type TEXT,
                         caption TEXT,
                         series_name TEXT,
+                        arc_name TEXT,
                         episode_num TEXT,
                         created_at REAL,
                         views INTEGER DEFAULT 0,
@@ -46,7 +47,7 @@ class DatabaseManager:
                     )
                 """)
                 await db.execute("""
-                    CREATE INDEX IF NOT EXISTS idx_search ON files (file_name, series_name, caption)
+                    CREATE INDEX IF NOT EXISTS idx_search ON files (file_name, series_name, arc_name, caption)
                 """)
                 await db.execute("""
                     CREATE TABLE IF NOT EXISTS users (
@@ -67,6 +68,7 @@ class DatabaseManager:
         mime_type: str,
         caption: str = "",
         series_name: str = "",
+        arc_name: str = "",
         episode_num: str = ""
     ):
         now = time.time()
@@ -81,6 +83,7 @@ class DatabaseManager:
                     "mime_type": mime_type,
                     "caption": caption,
                     "series_name": series_name,
+                    "arc_name": arc_name,
                     "episode_num": episode_num,
                     "created_at": now
                 }},
@@ -90,9 +93,9 @@ class DatabaseManager:
             async with aiosqlite.connect(self.sqlite_path) as db:
                 await db.execute("""
                     INSERT OR REPLACE INTO files (
-                        channel_id, message_id, file_name, file_size, mime_type, caption, series_name, episode_num, created_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (channel_id, message_id, file_name, file_size, mime_type, caption, series_name, episode_num, now))
+                        channel_id, message_id, file_name, file_size, mime_type, caption, series_name, arc_name, episode_num, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """, (channel_id, message_id, file_name, file_size, mime_type, caption, series_name, arc_name, episode_num, now))
                 await db.commit()
 
     async def get_file(self, message_id: int, channel_id: Optional[int] = None) -> Optional[Dict[str, Any]]:
@@ -110,13 +113,14 @@ class DatabaseManager:
                 row = await cursor.fetchone()
                 return dict(row) if row else None
 
-    async def search_files(self, query: str, limit: int = 50) -> List[Dict[str, Any]]:
+    async def search_files(self, query: str, limit: int = 60) -> List[Dict[str, Any]]:
         clean_q = f"%{query.strip()}%"
         if self.is_mongo:
             cursor = self._mongo_db.files.find({
                 "$or": [
                     {"file_name": {"$regex": query, "$options": "i"}},
                     {"series_name": {"$regex": query, "$options": "i"}},
+                    {"arc_name": {"$regex": query, "$options": "i"}},
                     {"caption": {"$regex": query, "$options": "i"}}
                 ]
             }).limit(limit)
@@ -126,9 +130,40 @@ class DatabaseManager:
                 db.row_factory = aiosqlite.Row
                 async with db.execute("""
                     SELECT * FROM files 
-                    WHERE file_name LIKE ? OR series_name LIKE ? OR caption LIKE ?
-                    ORDER BY id DESC LIMIT ?
-                """, (clean_q, clean_q, clean_q, limit)) as cursor:
+                    WHERE file_name LIKE ? OR series_name LIKE ? OR arc_name LIKE ? OR caption LIKE ?
+                    ORDER BY id ASC LIMIT ?
+                """, (clean_q, clean_q, clean_q, clean_q, limit)) as cursor:
+                    rows = await cursor.fetchall()
+                    return [dict(r) for r in rows]
+
+    async def get_series_arcs(self, series_name: str) -> List[str]:
+        clean_name = f"%{series_name.strip()}%"
+        if self.is_mongo:
+            arcs = await self._mongo_db.files.distinct("arc_name", {"series_name": {"$regex": series_name, "$options": "i"}})
+            return [a for a in arcs if a]
+        else:
+            async with aiosqlite.connect(self.sqlite_path) as db:
+                async with db.execute("""
+                    SELECT DISTINCT arc_name FROM files 
+                    WHERE (series_name LIKE ? OR arc_name LIKE ?) AND arc_name != ''
+                    ORDER BY id ASC
+                """, (clean_name, clean_name)) as cursor:
+                    rows = await cursor.fetchall()
+                    return [r[0] for r in rows if r[0]]
+
+    async def get_arc_files(self, arc_name: str) -> List[Dict[str, Any]]:
+        clean_name = f"%{arc_name.strip()}%"
+        if self.is_mongo:
+            cursor = self._mongo_db.files.find({"arc_name": {"$regex": arc_name, "$options": "i"}}).sort("id", 1)
+            return await cursor.to_list(length=150)
+        else:
+            async with aiosqlite.connect(self.sqlite_path) as db:
+                db.row_factory = aiosqlite.Row
+                async with db.execute("""
+                    SELECT * FROM files 
+                    WHERE arc_name LIKE ? OR caption LIKE ?
+                    ORDER BY id ASC LIMIT 150
+                """, (clean_name, clean_name)) as cursor:
                     rows = await cursor.fetchall()
                     return [dict(r) for r in rows]
 
