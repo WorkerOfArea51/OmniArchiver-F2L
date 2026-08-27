@@ -2,7 +2,7 @@ import os
 import io
 import asyncio
 from hydrogram import filters
-from hydrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
+from hydrogram.types import Message
 from bot.clients import TelegramBot
 from bot.config import Server
 from bot.database.files import save_file
@@ -124,20 +124,47 @@ async def batch_command(_, msg: Message):
 
             await asyncio.sleep(0.3)  # Small delay to avoid FloodWait
 
-        except Exception as e:
+        except Exception:
             continue
 
     if not indexed_items:
         return await status_msg.edit_text("❌ No media files were found in the specified range.")
 
-    # Prepare response
-    summary_text = (
+    # Format output with quote blocks directly in Telegram chat
+    message_chunks = []
+    current_chunk = (
         f"✅ **Batch Indexing Completed!**\n\n"
         f"📁 **Category:** `{category.upper()}`\n"
-        f"📦 **Total Files Indexed:** `{len(indexed_items)}`\n\n"
+        f"📦 **Total Files:** `{len(indexed_items)}`\n\n"
     )
 
-    # Build text file content with all links
+    for item in indexed_items:
+        human_size = get_human_size(item['file_size'])
+        entry = (
+            f"🎬 **{item['file_name']}** `({human_size})`\n"
+            f"> ▶️ [Stream Link]({item['stream_link']})\n"
+            f"> 📥 [Download Link]({item['dl_link']})\n\n"
+        )
+
+        # Telegram message limit is 4096 chars; split if approaching limit
+        if len(current_chunk) + len(entry) > 3800:
+            message_chunks.append(current_chunk)
+            current_chunk = entry
+        else:
+            current_chunk += entry
+
+    if current_chunk.strip():
+        message_chunks.append(current_chunk)
+
+    # Edit the initial status message with the first batch chunk
+    await status_msg.edit_text(message_chunks[0], disable_web_page_preview=True)
+
+    # If there are additional chunks (for large batches), send as follow-up messages
+    for follow_up in message_chunks[1:]:
+        await msg.reply(follow_up, quote=False, disable_web_page_preview=True)
+        await asyncio.sleep(0.5)
+
+    # Build and send text file list as optional backup
     txt_content = f"=== OmniArchiver Batch Links ({category.upper()}) ===\nTotal Files: {len(indexed_items)}\n\n"
     for item in indexed_items:
         human_size = get_human_size(item['file_size'])
@@ -148,25 +175,11 @@ async def batch_command(_, msg: Message):
             f"{'-'*50}\n"
         )
 
-    # If small number of items, show in message
-    if len(indexed_items) <= 10:
-        for item in indexed_items:
-            human_size = get_human_size(item['file_size'])
-            summary_text += (
-                f"🎬 **{item['file_name']}** ({human_size})\n"
-                f"▶️ [Stream]({item['stream_link']}) | 📥 [Download]({item['dl_link']})\n\n"
-            )
-    else:
-        summary_text += "📄 *All links have been compiled into the attached file below for easy access.*"
-
-    await status_msg.edit_text(summary_text, disable_web_page_preview=True)
-
-    # Send .txt file with complete link list
     file_bytes = io.BytesIO(txt_content.encode('utf-8'))
     file_bytes.name = f"batch_{category}_{start_id}_to_{end_id}.txt"
     
     await msg.reply_document(
         document=file_bytes,
-        caption=f"📁 **Batch Links List** ({category.upper()}) - `{len(indexed_items)} files`",
-        quote=True
+        caption=f"📁 **Batch Text List** ({category.upper()}) - `{len(indexed_items)} files`",
+        quote=False
     )
