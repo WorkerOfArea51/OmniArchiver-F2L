@@ -123,7 +123,7 @@ class StreamHandler:
             asyncio.create_task(db.increment_views(target_channel, message_id))
 
         # Select worker client for downloading stream
-        worker = client_pool.get_client()
+        stream_client = client_pool.primary_client
 
         chunk_offset = 0 if is_full_file else (start // CHUNK_SIZE)
         chunk_limit = 0 if is_full_file else (((content_length + CHUNK_SIZE - 1) // CHUNK_SIZE) + 1)
@@ -131,7 +131,7 @@ class StreamHandler:
         bytes_sent = 0
 
         try:
-            async for chunk in worker.stream_media(
+            async for chunk in stream_client.stream_media(
                 msg,
                 offset=chunk_offset,
                 limit=chunk_limit
