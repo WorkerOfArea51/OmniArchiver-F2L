@@ -1,11 +1,12 @@
 import os
 import io
 import asyncio
+from secrets import token_hex
 from hydrogram import filters
 from hydrogram.types import Message
 from bot.clients import TelegramBot
-from bot.config import Server
-from bot.database.files import save_file
+from bot.config import Telegram, Server
+from bot.database.files import save_batch
 from bot.modules.decorators import verify_user, verify_admin
 from bot.modules.parser import parse_telegram_link
 from bot.modules.telegram import get_message, get_file_properties, is_media_message
@@ -76,7 +77,7 @@ async def batch_command(_, msg: Message):
         quote=True
     )
 
-    indexed_items = []
+    episodes_list = []
     numeric_chat_id = channel_id
 
     for idx, curr_id in enumerate(range(start_id, end_id + 1), start=1):
@@ -86,28 +87,19 @@ async def batch_command(_, msg: Message):
                 file_name, file_size, mime_type = get_file_properties(target_msg)
                 numeric_chat_id = target_msg.chat.id if target_msg.chat else channel_id
                 
-                doc = await save_file(
-                    channel_id=numeric_chat_id,
-                    message_id=curr_id,
-                    file_name=file_name,
-                    file_size=file_size,
-                    mime_type=mime_type,
-                    user_id=msg.from_user.id,
-                    category=category,
-                    episode=len(indexed_items) + 1
-                )
-                
-                code = doc['code']
+                code = token_hex(Telegram.SECRET_CODE_LENGTH)
                 dl_link = f"{Server.BASE_URL}/dl/{code}"
                 stream_link = f"{Server.BASE_URL}/stream/{code}"
-                
-                indexed_items.append({
+
+                episodes_list.append({
+                    'code': code,
                     'message_id': curr_id,
+                    'episode_num': len(episodes_list) + 1,
                     'file_name': file_name,
                     'file_size': file_size,
+                    'mime_type': mime_type,
                     'dl_link': dl_link,
-                    'stream_link': stream_link,
-                    'code': code
+                    'stream_link': stream_link
                 })
 
             # Update progress every 10 messages
@@ -117,7 +109,7 @@ async def batch_command(_, msg: Message):
                         f"⏳ **Batch Indexing in Progress...**\n\n"
                         f"📁 Category: `{category.upper()}`\n"
                         f"🔄 Progress: `{idx}/{total_msgs}` messages scanned\n"
-                        f"✅ Files Found: `{len(indexed_items)}`"
+                        f"✅ Files Found: `{len(episodes_list)}`"
                     )
                 except Exception:
                     pass
@@ -127,23 +119,41 @@ async def batch_command(_, msg: Message):
         except Exception:
             continue
 
-    if not indexed_items:
+    if not episodes_list:
         return await status_msg.edit_text("❌ No media files were found in the specified range.")
+
+    # Save the entire batch as a SINGLE unified document in MongoDB
+    batch_doc = await save_batch(
+        channel_id=numeric_chat_id,
+        start_id=start_id,
+        end_id=end_id,
+        category=category,
+        user_id=msg.from_user.id,
+        episodes=episodes_list
+    )
+
+    # Use the episodes from batch_doc in case it was already indexed
+    final_episodes = batch_doc.get('episodes', episodes_list)
 
     # Format output with quote blocks directly in Telegram chat
     message_chunks = []
     current_chunk = (
         f"✅ **Batch Indexing Completed!**\n\n"
         f"📁 **Category:** `{category.upper()}`\n"
-        f"📦 **Total Files:** `{len(indexed_items)}`\n\n"
+        f"📦 **Total Episodes:** `{len(final_episodes)}`\n"
+        f"🗄️ **Saved as 1 Unified Batch Document in MongoDB**\n\n"
     )
 
-    for item in indexed_items:
+    for item in final_episodes:
         human_size = get_human_size(item['file_size'])
+        code = item['code']
+        dl_link = f"{Server.BASE_URL}/dl/{code}"
+        stream_link = f"{Server.BASE_URL}/stream/{code}"
+        
         entry = (
             f"🎬 **{item['file_name']}** `({human_size})`\n"
-            f"> ▶️ [Stream Link]({item['stream_link']})\n"
-            f"> 📥 [Download Link]({item['dl_link']})\n\n"
+            f"> ▶️ [Stream Link]({stream_link})\n"
+            f"> 📥 [Download Link]({dl_link})\n\n"
         )
 
         # Telegram message limit is 4096 chars; split if approaching limit
@@ -164,14 +174,17 @@ async def batch_command(_, msg: Message):
         await msg.reply(follow_up, quote=False, disable_web_page_preview=True)
         await asyncio.sleep(0.5)
 
-    # Build and send text file list as optional backup
-    txt_content = f"=== OmniArchiver Batch Links ({category.upper()}) ===\nTotal Files: {len(indexed_items)}\n\n"
-    for item in indexed_items:
+    # Build and send text file list as backup
+    txt_content = f"=== OmniArchiver Batch Links ({category.upper()}) ===\nTotal Files: {len(final_episodes)}\n\n"
+    for item in final_episodes:
         human_size = get_human_size(item['file_size'])
+        code = item['code']
+        dl_link = f"{Server.BASE_URL}/dl/{code}"
+        stream_link = f"{Server.BASE_URL}/stream/{code}"
         txt_content += (
             f"File: {item['file_name']} ({human_size})\n"
-            f"Stream: {item['stream_link']}\n"
-            f"Download: {item['dl_link']}\n"
+            f"Stream: {stream_link}\n"
+            f"Download: {dl_link}\n"
             f"{'-'*50}\n"
         )
 
@@ -180,6 +193,6 @@ async def batch_command(_, msg: Message):
     
     await msg.reply_document(
         document=file_bytes,
-        caption=f"📁 **Batch Text List** ({category.upper()}) - `{len(indexed_items)} files`",
+        caption=f"📁 **Batch Text List** ({category.upper()}) - `{len(final_episodes)} files`",
         quote=False
     )
