@@ -120,14 +120,20 @@ class DatabaseManager:
                 return dict(row) if row else None
 
     async def search_files(self, query: str, limit: int = 60) -> List[Dict[str, Any]]:
-        clean_q = f"%{query.strip()}%"
+        words = [re.escape(w) for w in query.strip().split() if w]
+        if not words:
+            return []
+        
+        regex_pattern = ".*".join(words)
+        sqlite_like = "%" + "%".join(query.strip().split()) + "%"
+
         if self.is_mongo:
             cursor = self._mongo_db.files.find({
                 "$or": [
-                    {"file_name": {"$regex": query, "$options": "i"}},
-                    {"series_name": {"$regex": query, "$options": "i"}},
-                    {"arc_name": {"$regex": query, "$options": "i"}},
-                    {"caption": {"$regex": query, "$options": "i"}}
+                    {"file_name": {"$regex": regex_pattern, "$options": "i"}},
+                    {"series_name": {"$regex": regex_pattern, "$options": "i"}},
+                    {"arc_name": {"$regex": regex_pattern, "$options": "i"}},
+                    {"caption": {"$regex": regex_pattern, "$options": "i"}}
                 ]
             }).limit(limit)
             return await cursor.to_list(length=limit)
@@ -138,7 +144,7 @@ class DatabaseManager:
                     SELECT * FROM files 
                     WHERE file_name LIKE ? OR series_name LIKE ? OR arc_name LIKE ? OR caption LIKE ?
                     ORDER BY id ASC LIMIT ?
-                """, (clean_q, clean_q, clean_q, clean_q, limit)) as cursor:
+                """, (sqlite_like, sqlite_like, sqlite_like, sqlite_like, limit)) as cursor:
                     rows = await cursor.fetchall()
                     return [dict(r) for r in rows]
 

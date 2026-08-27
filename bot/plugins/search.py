@@ -2,6 +2,7 @@
 import logging
 import urllib.parse
 from pyrogram import Client, filters
+from pyrogram.errors import MessageNotModified
 from pyrogram.types import (
     Message,
     InlineKeyboardMarkup,
@@ -77,9 +78,14 @@ async def execute_search(client: Client, message: Message, query: str):
         else:
             await render_single_view(search_msg, results[0])
 
+    except MessageNotModified:
+        pass
     except Exception as e:
         logger.error(f"Search execution error for query '{query}': {e}", exc_info=True)
-        await search_msg.edit_text(f"⚠️ **Search Error:** `{str(e)}`")
+        try:
+            await search_msg.edit_text(f"⚠️ **Search Error:** `{str(e)}`")
+        except Exception:
+            pass
 
 async def render_batch_view(target_msg, results, title: str):
     """Renders clean batch view with 1-tap copyable links and M3U playlist."""
