@@ -1,6 +1,8 @@
-# -*- coding: utf-8 -*-
+﻿# -*- coding: utf-8 -*-
+# Thunder/bot/plugins/search.py - Smart Search & Interactive Arc Cards
+
 import logging
-import urllib.parse
+from urllib.parse import quote
 from pyrogram import Client, filters
 from pyrogram.errors import MessageNotModified
 from pyrogram.types import (
@@ -9,26 +11,25 @@ from pyrogram.types import (
     InlineKeyboardButton,
     CallbackQuery
 )
-from bot.core.config import Config
-from bot.core.database import db
-from bot.core.file_properties import humanbytes
+from Thunder.utils.database import db
+from Thunder.utils.human_readable import humanbytes
+from Thunder.vars import Var
 
 logger = logging.getLogger(__name__)
 
 @Client.on_message(filters.command("search") & filters.private & filters.incoming & ~filters.me, group=1)
 async def search_command(client: Client, message: Message):
     message.stop_propagation()
-    query = message.text.split(maxsplit=1)
-    if len(query) < 2:
-        await message.reply_text("🔍 **Usage:** `/search <name>`\nExamples:\n• `/search Bleach`\n• `/search 86`\n• `/search Ballerina`")
+    query = " ".join(message.command[1:]).strip()
+    if not query:
+        await message.reply_text("❓ Please provide a search query.\nExample: `/search Bleach` or `/search 86`")
         return
-    await execute_search(client, message, query[1].strip())
+    await execute_search(client, message, query)
 
 @Client.on_message(filters.text & filters.private & filters.incoming & ~filters.me & ~filters.bot, group=3)
 async def direct_text_search(client: Client, message: Message):
     query = message.text.strip()
-    # Ignore any command or single character text
-    if query.startswith("/") or len(query) < 2:
+    if query.startswith("/"):
         return
     await execute_search(client, message, query)
 
@@ -36,84 +37,84 @@ async def execute_search(client: Client, message: Message, query: str):
     search_msg = await message.reply_text(f"🔍 *Searching for:* `{query}`...")
 
     try:
-        # 1. Check for multi-arc series (e.g. Bleach, Naruto, One Piece)
         arcs = await db.get_series_arcs(query)
 
         if len(arcs) > 1:
-            arc_buttons = []
+            buttons = []
+            row = []
             for arc in arcs:
-                arc_buttons.append([
-                    InlineKeyboardButton(f"📁 {arc}", callback_data=f"arc:{arc[:40]}")
-                ])
+                clean_arc = arc.strip()
+                row.append(InlineKeyboardButton(f"📁 {clean_arc}", callback_data=f"arc:{clean_arc[:40]}"))
+                if len(row) == 2:
+                    buttons.append(row)
+                    row = []
+            if row:
+                buttons.append(row)
 
-            all_files = await db.search_files(query, limit=500)
-            playlist_url = f"{Config.BASE_URL}/playlist/{urllib.parse.quote(query.replace(' ', '_'))}.m3u"
+            playlist_url = f"{Var.URL}playlist/{quote(query.replace(' ', '_'))}.m3u"
+            buttons.insert(0, [InlineKeyboardButton("📺 Open M3U Playlist", url=playlist_url)])
 
-            keyboard = InlineKeyboardMarkup([
-                [InlineKeyboardButton("📺 Open M3U Playlist", url=playlist_url)],
-                *arc_buttons
-            ])
-
+            total_matches = await db.search_files(query, limit=500)
             text = (
                 f"🎬 **{query.title()} — Multi-Arc Series**\n"
                 f"📚 **Detected Arcs:** `{len(arcs)}`\n"
-                f"📦 **Total Episodes:** `{len(all_files)}`\n\n"
+                f"📦 **Total Episodes:** `{len(total_matches)}`\n\n"
                 f"📺 **M3U Playlist URL (Tap to copy):**\n`{playlist_url}`\n\n"
-                f"👉 *Select an Arc below to view episodes:* "
+                f"*Select an Arc below to view episodes:*"
             )
-
-            await search_msg.edit_text(text, reply_markup=keyboard, disable_web_page_preview=True)
+            try:
+                await search_msg.edit_text(text, reply_markup=InlineKeyboardMarkup(buttons), disable_web_page_preview=True)
+            except MessageNotModified:
+                pass
             return
 
-        # 2. Search for files / specific arc
         results = await db.search_files(query, limit=60)
         if not results:
-            await search_msg.edit_text(f"❌ No media found matching `{query}`.\nMake sure your channels are indexed with `/index`.")
+            try:
+                await search_msg.edit_text(f"❌ No media found matching `{query}`.\nMake sure your channels are indexed with `/index`.")
+            except MessageNotModified:
+                pass
             return
 
-        is_series = len(results) > 1 and any(r.get("episode_num") for r in results)
-
-        if is_series:
-            await render_batch_view(search_msg, results, query)
-        else:
+        if len(results) == 1:
             await render_single_view(search_msg, results[0])
+        else:
+            await render_batch_view(search_msg, results, query)
 
     except MessageNotModified:
         pass
     except Exception as e:
-        logger.error(f"Search execution error for query '{query}': {e}", exc_info=True)
+        logger.error(f"Search execution error for query \'{query}\': {e}", exc_info=True)
         try:
             await search_msg.edit_text(f"⚠️ **Search Error:** `{str(e)}`")
         except Exception:
             pass
 
-async def render_batch_view(target_msg, results, title: str):
-    """Renders clean batch view with 1-tap copyable links and M3U playlist."""
-    batch_text_lines = []
+async def render_batch_view(target_msg, results, title_name):
+    total = len(results)
+    playlist_url = f"{Var.URL}playlist/{quote(title_name.replace(' ', '_'))}.m3u"
+
+    batch_text_lines = [
+        f"🎬 **{title_name.title()}**",
+        f"📦 **Total Episodes:** `{total}`",
+        f"📺 **M3U Playlist:**\n`{playlist_url}`\n"
+    ]
+
     keyboard_buttons = []
-
-    series_header = results[0].get("arc_name") or results[0].get("series_name") or title
-    playlist_url = f"{Config.BASE_URL}/playlist/{urllib.parse.quote(series_header.replace(' ', '_'))}.m3u"
-
-    batch_text_lines.append(f"🎬 **{series_header}**")
-    batch_text_lines.append(f"📦 **Total Episodes:** `{len(results)}`")
-    batch_text_lines.append(f"📺 **M3U Playlist:** `{playlist_url}`\n")
-
-    for item in results:
-        ch = item["channel_id"]
+    for idx, item in enumerate(results[:25], start=1):
         mid = item["message_id"]
-        ep = item.get("episode_num") or f"ID {mid}"
+        ch = item["channel_id"]
         size = humanbytes(item["file_size"])
-        direct_url = f"{Config.BASE_URL}/dl/{ch}/{mid}"
-        watch_url = f"{Config.BASE_URL}/watch/{ch}/{mid}"
+        ep = item.get("episode_num") or f"ID {mid}"
+        dl_link = f"{Var.URL}dl/{ch}/{mid}"
+        stream_link = f"{Var.URL}stream/{ch}/{mid}"
 
-        batch_text_lines.append(f"• **{ep}** ({size})\n  `{direct_url}`")
+        batch_text_lines.append(f"• **{ep}** ({size})\n`{dl_link}`")
 
-        if len(keyboard_buttons) < 10:
-            keyboard_buttons.append([
-                InlineKeyboardButton(f"▶️ {ep}", url=watch_url),
-                InlineKeyboardButton("⬇️ Download", url=direct_url)
-            ])
+        keyboard_buttons.append([
+            InlineKeyboardButton(f"▶️ {ep}", url=stream_link),
+            InlineKeyboardButton("⬇️ Download", url=dl_link)
+        ])
 
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("📺 Open M3U Playlist", url=playlist_url)],
@@ -132,13 +133,12 @@ async def render_batch_view(target_msg, results, title: str):
         logger.warning(f"render_batch_view note: {e}")
 
 async def render_single_view(target_msg, item):
-    """Renders single movie/video card with Direct Link for StreamHub & Web Player."""
     ch = item["channel_id"]
     mid = item["message_id"]
     file_name = item["file_name"]
     size = humanbytes(item["file_size"])
-    direct_link = f"{Config.BASE_URL}/dl/{ch}/{mid}"
-    player_url = f"{Config.BASE_URL}/watch/{ch}/{mid}"
+    direct_link = f"{Var.URL}dl/{ch}/{mid}"
+    player_url = f"{Var.URL}watch/{ch}/{mid}"
 
     text = (
         f"🎬 **{file_name}**\n"

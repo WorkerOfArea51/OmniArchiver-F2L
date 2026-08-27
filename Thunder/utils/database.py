@@ -1,32 +1,34 @@
+﻿# -*- coding: utf-8 -*-
+# Thunder/utils/database.py - OmniArchiver Async Database Layer
+
 import re
 import time
 import logging
 from typing import Optional, Dict, Any, List
 import aiosqlite
-from bot.core.config import Config
+from Thunder.vars import Var
 
 logger = logging.getLogger(__name__)
 
 class DatabaseManager:
-    """Async Database Layer supporting multi-channel indexing, arc/saga grouping, and full-text search."""
+    """Async Database Layer supporting MongoDB Atlas & SQLite WAL mode."""
 
     def __init__(self):
-        self.is_mongo = bool(Config.DATABASE_URL.startswith("mongodb"))
+        self.is_mongo = bool(Var.DATABASE_URL.startswith("mongodb"))
         self._mongo_client = None
         self._mongo_db = None
-        self.sqlite_path = Config.SQLITE_PATH
+        self.sqlite_path = Var.SQLITE_PATH
 
     async def init(self):
         if self.is_mongo:
             try:
                 from motor.motor_asyncio import AsyncIOMotorClient
-                self._mongo_client = AsyncIOMotorClient(Config.DATABASE_URL)
+                self._mongo_client = AsyncIOMotorClient(Var.DATABASE_URL)
                 try:
                     self._mongo_db = self._mongo_client.get_default_database()
                 except Exception:
                     self._mongo_db = self._mongo_client["omni_archiver"]
                 
-                # Test connection
                 await self._mongo_db.command("ping")
                 logger.info("Successfully connected and authenticated to MongoDB Atlas.")
             except Exception as e:
@@ -59,17 +61,22 @@ class DatabaseManager:
                 await db.execute("""
                     CREATE INDEX IF NOT EXISTS idx_search ON files (file_name, series_name, arc_name, caption)
                 """)
-                await db.execute("""
-                    CREATE TABLE IF NOT EXISTS users (
-                        user_id INTEGER PRIMARY KEY,
-                        is_banned INTEGER DEFAULT 0,
-                        created_at REAL
-                    )
-                """)
                 await db.commit()
-            logger.info(f"SQLite database initialized at: {self.sqlite_path}")
+                logger.info(f"SQLite WAL database initialized at: {self.sqlite_path}")
 
-    async def add_file(
+    async def ensure_indexes(self, raise_on_error: bool = False):
+        if self.is_mongo and self._mongo_db is not None:
+            try:
+                await self._mongo_db.files.create_index([("channel_id", 1), ("message_id", 1)], unique=True)
+                await self._mongo_db.files.create_index([("file_name", "text"), ("series_name", "text"), ("arc_name", "text")])
+                return True
+            except Exception as e:
+                logger.warning(f"Index creation note: {e}")
+                if raise_on_error:
+                    raise e
+        return True
+
+    async def insert_file(
         self,
         channel_id: int,
         message_id: int,
@@ -83,20 +90,23 @@ class DatabaseManager:
     ):
         now = time.time()
         if self.is_mongo:
+            doc = {
+                "channel_id": channel_id,
+                "message_id": message_id,
+                "file_name": file_name,
+                "file_size": file_size,
+                "mime_type": mime_type,
+                "caption": caption,
+                "series_name": series_name,
+                "arc_name": arc_name,
+                "episode_num": episode_num,
+                "created_at": now,
+                "views": 0,
+                "downloads": 0
+            }
             await self._mongo_db.files.update_one(
                 {"channel_id": channel_id, "message_id": message_id},
-                {"$set": {
-                    "channel_id": channel_id,
-                    "message_id": message_id,
-                    "file_name": file_name,
-                    "file_size": file_size,
-                    "mime_type": mime_type,
-                    "caption": caption,
-                    "series_name": series_name,
-                    "arc_name": arc_name,
-                    "episode_num": episode_num,
-                    "created_at": now
-                }},
+                {"$set": doc},
                 upsert=True
             )
         else:
@@ -168,61 +178,16 @@ class DatabaseManager:
                     return [r[0] for r in rows if r[0]]
 
     async def get_arc_files(self, arc_name: str) -> List[Dict[str, Any]]:
-        clean_name = f"%{arc_name.strip()}%"
+        clean_arc = f"%{arc_name.strip()}%"
         if self.is_mongo:
-            cursor = self._mongo_db.files.find({"arc_name": {"$regex": arc_name, "$options": "i"}}).sort("id", 1)
-            return await cursor.to_list(length=150)
+            cursor = self._mongo_db.files.find({"arc_name": {"$regex": arc_name, "$options": "i"}}).sort("id", 1).limit(200)
+            return await cursor.to_list(length=200)
         else:
             async with aiosqlite.connect(self.sqlite_path, timeout=30.0) as db:
                 db.row_factory = aiosqlite.Row
-                async with db.execute("""
-                    SELECT * FROM files 
-                    WHERE arc_name LIKE ? OR caption LIKE ?
-                    ORDER BY id ASC LIMIT 150
-                """, (clean_name, clean_name)) as cursor:
+                async with db.execute("SELECT * FROM files WHERE arc_name LIKE ? ORDER BY id ASC LIMIT 200", (clean_arc,)) as cursor:
                     rows = await cursor.fetchall()
                     return [dict(r) for r in rows]
-
-    async def increment_views(self, channel_id: int, message_id: int):
-        if self.is_mongo:
-            await self._mongo_db.files.update_one({"channel_id": channel_id, "message_id": message_id}, {"$inc": {"views": 1}})
-        else:
-            async with aiosqlite.connect(self.sqlite_path, timeout=30.0) as db:
-                await db.execute("UPDATE files SET views = views + 1 WHERE channel_id = ? AND message_id = ?", (channel_id, message_id))
-                await db.commit()
-
-    async def increment_downloads(self, channel_id: int, message_id: int):
-        if self.is_mongo:
-            await self._mongo_db.files.update_one({"channel_id": channel_id, "message_id": message_id}, {"$inc": {"downloads": 1}})
-        else:
-            async with aiosqlite.connect(self.sqlite_path, timeout=30.0) as db:
-                await db.execute("UPDATE files SET downloads = downloads + 1 WHERE channel_id = ? AND message_id = ?", (channel_id, message_id))
-                await db.commit()
-
-    async def is_user_banned(self, user_id: int) -> bool:
-        if self.is_mongo:
-            user = await self._mongo_db.users.find_one({"user_id": user_id})
-            return bool(user and user.get("is_banned"))
-        else:
-            async with aiosqlite.connect(self.sqlite_path, timeout=30.0) as db:
-                async with db.execute("SELECT is_banned FROM users WHERE user_id = ?", (user_id,)) as cursor:
-                    row = await cursor.fetchone()
-                    return bool(row and row[0] == 1)
-
-    async def ban_user(self, user_id: int, ban: bool = True):
-        if self.is_mongo:
-            await self._mongo_db.users.update_one(
-                {"user_id": user_id},
-                {"$set": {"is_banned": 1 if ban else 0, "created_at": time.time()}},
-                upsert=True
-            )
-        else:
-            async with aiosqlite.connect(self.sqlite_path, timeout=30.0) as db:
-                await db.execute(
-                    "INSERT OR REPLACE INTO users (user_id, is_banned, created_at) VALUES (?, ?, ?)",
-                    (user_id, 1 if ban else 0, time.time())
-                )
-                await db.commit()
 
     async def get_total_files(self) -> int:
         if self.is_mongo:
@@ -230,7 +195,38 @@ class DatabaseManager:
         else:
             async with aiosqlite.connect(self.sqlite_path, timeout=30.0) as db:
                 async with db.execute("SELECT COUNT(*) FROM files") as cursor:
-                    row = await cursor.fetchone()
-                    return row[0] if row else 0
+                    res = await cursor.fetchone()
+                    return res[0] if res else 0
+
+    async def increment_views(self, channel_id: int, message_id: int):
+        if self.is_mongo:
+            await self._mongo_db.files.update_one({"channel_id": channel_id, "message_id": message_id}, {"$inc": {"views": 1}})
+
+    async def increment_downloads(self, channel_id: int, message_id: int):
+        if self.is_mongo:
+            await self._mongo_db.files.update_one({"channel_id": channel_id, "message_id": message_id}, {"$inc": {"downloads": 1}})
+
+    async def delete_file(self, message_id: int, channel_id: Optional[int] = None):
+        if self.is_mongo:
+            q = {"message_id": message_id}
+            if channel_id: q["channel_id"] = channel_id
+            await self._mongo_db.files.delete_many(q)
+        else:
+            async with aiosqlite.connect(self.sqlite_path, timeout=30.0) as db:
+                if channel_id:
+                    await db.execute("DELETE FROM files WHERE channel_id = ? AND message_id = ?", (channel_id, message_id))
+                else:
+                    await db.execute("DELETE FROM files WHERE message_id = ?", (message_id,))
+                await db.commit()
+
+    async def get_restart_message(self) -> Optional[Dict[str, Any]]:
+        return None
+
+    async def delete_restart_message(self, message_id: int):
+        pass
+
+    async def close(self):
+        if self._mongo_client:
+            self._mongo_client.close()
 
 db = DatabaseManager()
