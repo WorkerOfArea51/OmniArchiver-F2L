@@ -57,26 +57,34 @@ async def start_services():
     app = setup_web_server()
     runner = web.AppRunner(app)
     await runner.setup()
-    # 4. Start Native Alwaysdata / VPS Web Server Listener
+    # 4. Start Dual IPv4 + IPv6 Web Server for Alwaysdata & VPS
+    port = int(os.environ.get("PORT", 8100))
     always_ip = os.environ.get("IP")
-    target_hosts = [always_ip] if always_ip else [Config.BIND_ADDRESS, "0.0.0.0", "::", "127.0.0.1"]
-    
-    bound_any = False
-    for host in target_hosts:
-        if not host:
-            continue
-        try:
-            site = web.TCPSite(runner, host=host, port=Config.PORT)
-            await site.start()
-            logger.info(f"🌐 Web Server bound to: http://{host}:{Config.PORT}")
-            bound_any = True
-            break
-        except Exception as e:
-            logger.warning(f"Failed to bind {host}:{Config.PORT}: {e}")
 
-    if not bound_any:
-        site = web.TCPSite(runner, port=Config.PORT)
-        await site.start()
+    # Bind specific Alwaysdata IP if provided
+    if always_ip:
+        try:
+            site_always = web.TCPSite(runner, host=always_ip, port=port)
+            await site_always.start()
+            logger.info(f"🌐 Alwaysdata IP listening at: http://[{always_ip}]:{port}")
+        except Exception as e:
+            logger.warning(f"Alwaysdata IP bind note: {e}")
+
+    # Bind IPv6 universal (::)
+    try:
+        site_v6 = web.TCPSite(runner, host="::", port=port)
+        await site_v6.start()
+        logger.info(f"🌐 IPv6 listening at: http://[::]:{port}")
+    except Exception as e:
+        logger.warning(f"IPv6 bind note: {e}")
+
+    # Bind IPv4 universal (0.0.0.0)
+    try:
+        site_v4 = web.TCPSite(runner, host="0.0.0.0", port=port)
+        await site_v4.start()
+        logger.info(f"🌐 IPv4 listening at: http://0.0.0.0:{port}")
+    except Exception as e:
+        logger.warning(f"IPv4 bind note: {e}")
 
     logger.info(f"🚀 Public Endpoint URL: {Config.BASE_URL}")
     logger.info("✨ OmniArchiver F2L is ready to stream & download!")
