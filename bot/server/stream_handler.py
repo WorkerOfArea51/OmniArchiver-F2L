@@ -114,6 +114,10 @@ class StreamHandler:
         response = web.StreamResponse(status=status, headers=headers)
         await response.prepare(request)
 
+        # External video players (ExoPlayer, VLC, mpv) probe container specs via HEAD requests
+        if request.method == "HEAD":
+            return response
+
         if as_download:
             asyncio.create_task(db.increment_downloads(target_channel, message_id))
         else:

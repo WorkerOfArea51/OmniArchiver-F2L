@@ -38,11 +38,13 @@ async def health_route(request: web.Request):
 
 # Stream routes
 @routes.get(r"/stream/{message_id:\d+}")
+@routes.head(r"/stream/{message_id:\d+}")
 async def stream_single(request: web.Request):
     msg_id = int(request.match_info["message_id"])
     return await StreamHandler.serve(request, message_id=msg_id, as_download=False)
 
 @routes.get(r"/stream/{channel_id:-?\d+}/{message_id:\d+}")
+@routes.head(r"/stream/{channel_id:-?\d+}/{message_id:\d+}")
 async def stream_multi_channel(request: web.Request):
     channel_id = int(request.match_info["channel_id"])
     msg_id = int(request.match_info["message_id"])
@@ -50,13 +52,17 @@ async def stream_multi_channel(request: web.Request):
 
 # Download routes
 @routes.get(r"/dl/{message_id:\d+}")
+@routes.head(r"/dl/{message_id:\d+}")
 @routes.get(r"/download/{message_id:\d+}")
+@routes.head(r"/download/{message_id:\d+}")
 async def download_single(request: web.Request):
     msg_id = int(request.match_info["message_id"])
     return await StreamHandler.serve(request, message_id=msg_id, as_download=True)
 
 @routes.get(r"/dl/{channel_id:-?\d+}/{message_id:\d+}")
+@routes.head(r"/dl/{channel_id:-?\d+}/{message_id:\d+}")
 @routes.get(r"/download/{channel_id:-?\d+}/{message_id:\d+}")
+@routes.head(r"/download/{channel_id:-?\d+}/{message_id:\d+}")
 async def download_multi_channel(request: web.Request):
     channel_id = int(request.match_info["channel_id"])
     msg_id = int(request.match_info["message_id"])
