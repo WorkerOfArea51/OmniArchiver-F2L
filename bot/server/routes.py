@@ -37,40 +37,40 @@ async def health_route(request: web.Request):
     })
 
 # Stream routes
-@routes.get("/stream/{message_id:\d+}")
+@routes.get(r"/stream/{message_id:\d+}")
 async def stream_single(request: web.Request):
     msg_id = int(request.match_info["message_id"])
     return await StreamHandler.serve(request, message_id=msg_id, as_download=False)
 
-@routes.get("/stream/{channel_id:-?\d+}/{message_id:\d+}")
+@routes.get(r"/stream/{channel_id:-?\d+}/{message_id:\d+}")
 async def stream_multi_channel(request: web.Request):
     channel_id = int(request.match_info["channel_id"])
     msg_id = int(request.match_info["message_id"])
     return await StreamHandler.serve(request, message_id=msg_id, channel_id=channel_id, as_download=False)
 
 # Download routes
-@routes.get("/dl/{message_id:\d+}")
-@routes.get("/download/{message_id:\d+}")
+@routes.get(r"/dl/{message_id:\d+}")
+@routes.get(r"/download/{message_id:\d+}")
 async def download_single(request: web.Request):
     msg_id = int(request.match_info["message_id"])
     return await StreamHandler.serve(request, message_id=msg_id, as_download=True)
 
-@routes.get("/dl/{channel_id:-?\d+}/{message_id:\d+}")
-@routes.get("/download/{channel_id:-?\d+}/{message_id:\d+}")
+@routes.get(r"/dl/{channel_id:-?\d+}/{message_id:\d+}")
+@routes.get(r"/download/{channel_id:-?\d+}/{message_id:\d+}")
 async def download_multi_channel(request: web.Request):
     channel_id = int(request.match_info["channel_id"])
     msg_id = int(request.match_info["message_id"])
     return await StreamHandler.serve(request, message_id=msg_id, channel_id=channel_id, as_download=True)
 
 # Web Player routes
-@routes.get("/watch/{message_id:\d+}")
+@routes.get(r"/watch/{message_id:\d+}")
 async def web_player_single(request: web.Request):
     msg_id = int(request.match_info["message_id"])
     record = await db.get_file(msg_id)
     channel_id = record["channel_id"] if record else (Config.CHANNELS[0] if Config.CHANNELS else 0)
     return await render_player(request, channel_id, msg_id)
 
-@routes.get("/watch/{channel_id:-?\d+}/{message_id:\d+}")
+@routes.get(r"/watch/{channel_id:-?\d+}/{message_id:\d+}")
 async def web_player_multi(request: web.Request):
     channel_id = int(request.match_info["channel_id"])
     msg_id = int(request.match_info["message_id"])
