@@ -44,7 +44,7 @@ ABOUT_TEXT = """
 • **License:** MIT License
 """
 
-@Client.on_message(filters.command("start") & filters.private)
+@Client.on_message(filters.command("start") & filters.private & filters.incoming & ~filters.me)
 async def start_handler(client: Client, message: Message):
     mention = message.from_user.mention if message.from_user else "User"
     keyboard = InlineKeyboardMarkup([
@@ -58,21 +58,21 @@ async def start_handler(client: Client, message: Message):
     ])
     await message.reply_text(START_TEXT.format(mention=mention), reply_markup=keyboard, disable_web_page_preview=True)
 
-@Client.on_message(filters.command("help") & filters.private)
+@Client.on_message(filters.command("help") & filters.private & filters.incoming & ~filters.me)
 async def help_handler(client: Client, message: Message):
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("🔙 Back to Start", callback_data="start_data")]
     ])
     await message.reply_text(HELP_TEXT, reply_markup=keyboard)
 
-@Client.on_message(filters.command("about") & filters.private)
+@Client.on_message(filters.command("about") & filters.private & filters.incoming & ~filters.me)
 async def about_handler(client: Client, message: Message):
     keyboard = InlineKeyboardMarkup([
         [InlineKeyboardButton("🔙 Back to Start", callback_data="start_data")]
     ])
     await message.reply_text(ABOUT_TEXT, reply_markup=keyboard)
 
-@Client.on_message(filters.command("ping"))
+@Client.on_message(filters.command("ping") & filters.incoming & ~filters.me)
 async def ping_handler(client: Client, message: Message):
     start = time.time()
     msg = await message.reply_text("🏓 Pinging...")

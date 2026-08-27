@@ -15,7 +15,7 @@ ADMIN_START_TIME = time.time()
 def is_admin(user_id: int) -> bool:
     return (Config.OWNER_ID and user_id == Config.OWNER_ID) or (user_id in Config.AUTH_USERS)
 
-@Client.on_message(filters.command("stats") & filters.private)
+@Client.on_message(filters.command("stats") & filters.private & filters.incoming & ~filters.me)
 async def stats_handler(client: Client, message: Message):
     """Displays real-time system, memory, and database metrics."""
     user_id = message.from_user.id if message.from_user else 0
@@ -48,7 +48,7 @@ async def stats_handler(client: Client, message: Message):
 
     await msg.edit_text(text)
 
-@Client.on_message(filters.command("status"))
+@Client.on_message(filters.command("status") & filters.incoming & ~filters.me)
 async def status_handler(client: Client, message: Message):
     """Quick operational health check."""
     uptime = time_formatter(time.time() - ADMIN_START_TIME)
@@ -59,7 +59,7 @@ async def status_handler(client: Client, message: Message):
         f"• Host: `{Config.BASE_URL}`"
     )
 
-@Client.on_message(filters.command("del") & filters.private)
+@Client.on_message(filters.command("del") & filters.private & filters.incoming & ~filters.me)
 async def delete_handler(client: Client, message: Message):
     """Deletes a file from both the Telegram Channel and the Database index."""
     user_id = message.from_user.id if message.from_user else 0
@@ -100,7 +100,7 @@ async def delete_handler(client: Client, message: Message):
         f"• Database Search Index: `Removed`"
     )
 
-@Client.on_message(filters.command("restart") & filters.private)
+@Client.on_message(filters.command("restart") & filters.private & filters.incoming & ~filters.me)
 async def restart_handler(client: Client, message: Message):
     """Graceful restart with automatic completion notification."""
     user_id = message.from_user.id if message.from_user else 0

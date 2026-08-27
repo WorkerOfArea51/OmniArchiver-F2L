@@ -37,7 +37,7 @@ def extract_episode_num(text: str, filename: str):
         return f"EP - {num:02d}" if num < 100 else f"EP - {num}"
     return ""
 
-@Client.on_message(filters.command("index") & filters.private)
+@Client.on_message(filters.command("index") & filters.private & filters.incoming & ~filters.me)
 async def index_channels_cmd(client: Client, message: Message):
     """High-speed resilient channel history indexer with time-throttled UI updates."""
     user_id = message.from_user.id if message.from_user else 0

@@ -13,7 +13,7 @@ def is_authorized(user_id: int) -> bool:
         return True
     return user_id in Config.AUTH_USERS
 
-@Client.on_message((filters.document | filters.video | filters.audio | filters.voice | filters.video_note | filters.photo) & filters.private)
+@Client.on_message((filters.document | filters.video | filters.audio | filters.voice | filters.video_note | filters.photo) & filters.private & filters.incoming & ~filters.me)
 async def private_file_uploader(client: Client, message: Message):
     """Processes uploaded media in PM and generates clean Direct Link."""
     user_id = message.from_user.id if message.from_user else 0
