@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
 import re
+import secrets
 import asyncio
 import logging
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 from aiohttp import web
 from bot.core.config import Config
 from bot.core.client_pool import client_pool
@@ -11,7 +12,7 @@ from bot.core.file_properties import get_file_details, get_media_from_message
 
 logger = logging.getLogger("StreamHandler")
 
-CHUNK_SIZE = 1024 * 1024  # 1 MiB MTProto block
+CHUNK_SIZE = 1024 * 1024  # 1 MiB MTProto standard block
 RANGE_REGEX = re.compile(r"^bytes=(?P<start>\d*)-(?P<end>\d*)$")
 
 CORS_HEADERS = {
@@ -50,7 +51,9 @@ def parse_range_header(range_header: str, file_size: int) -> tuple[int, int]:
     return start, end
 
 class StreamHandler:
-    """Production Zero-RAM Direct HTTP Stream & Download Engine with Real-Time Logging."""
+    """
+    ByteStreamer Engine directly patterned after fyaz05/FileToLink (Thunder).
+    """
 
     @classmethod
     async def serve(
@@ -59,9 +62,7 @@ class StreamHandler:
         message_id: int,
         channel_id: int = None,
         as_download: bool = False
-    ) -> web.StreamResponse:
-        logger.info(f"➡️ [HTTP {request.method}] Request for msg {message_id} on channel {channel_id} (Download: {as_download})")
-
+    ) -> web.Response:
         target_channel = channel_id
         if not target_channel:
             record = await db.get_file(message_id)
@@ -71,35 +72,33 @@ class StreamHandler:
                 target_channel = Config.CHANNELS[0]
 
         if not target_channel:
-            logger.error("Target channel not found or configured.")
             raise web.HTTPNotFound(text="Target channel not configured.", headers=CORS_HEADERS)
 
-        # 1. Fetch message via primary client
+        # Get message from Telegram
         try:
             msg = await client_pool.primary_client.get_messages(target_channel, message_id)
         except Exception as e:
             logger.error(f"Error fetching message {message_id} from {target_channel}: {e}")
-            raise web.HTTPNotFound(text=f"Telegram message error: {e}", headers=CORS_HEADERS)
+            raise web.HTTPNotFound(text="File not found in storage channel.", headers=CORS_HEADERS)
 
         if not msg or msg.empty:
-            logger.error(f"Message {message_id} is empty or deleted.")
             raise web.HTTPNotFound(text="Message is empty or deleted.", headers=CORS_HEADERS)
 
         media = get_media_from_message(msg)
         if not media:
-            logger.error(f"Message {message_id} contains no downloadable media.")
             raise web.HTTPNotFound(text="Message contains no streamable media.", headers=CORS_HEADERS)
 
         file_name, file_size, mime_type, _ = get_file_details(msg)
         if file_size == 0:
-            logger.error(f"File size for {file_name} is reported as 0.")
             raise web.HTTPNotFound(text="File size is reported as zero.", headers=CORS_HEADERS)
 
         range_header = request.headers.get("Range", "")
         start, end = parse_range_header(range_header, file_size)
         content_length = end - start + 1
 
-        is_full_file = (start == 0 and end == file_size - 1)
+        if start == 0 and end == file_size - 1:
+            range_header = ""
+
         disposition = "attachment" if as_download else "inline"
         safe_filename = file_name.replace('"', '\"')
 
@@ -113,68 +112,63 @@ class StreamHandler:
             **CORS_HEADERS,
         }
 
-        status = 206 if range_header else 200
         if range_header:
             headers["Content-Range"] = f"bytes {start}-{end}/{file_size}"
 
-        logger.info(f"📦 Serving {file_name} ({content_length} bytes, Status: {status})")
-
-        response = web.StreamResponse(status=status, headers=headers)
-        await response.prepare(request)
-
-        # Immediate return on HEAD
+        # Fast HEAD response for players and download managers
         if request.method == "HEAD":
-            logger.info("HEAD response sent.")
-            return response
+            return web.Response(
+                status=206 if range_header else 200,
+                headers=headers
+            )
 
-        # Background stats
+        # Background statistics
         if as_download:
             asyncio.create_task(db.increment_downloads(target_channel, message_id))
         else:
             asyncio.create_task(db.increment_views(target_channel, message_id))
 
-        # MTProto streaming
-        chunk_offset = 0 if is_full_file else (start // CHUNK_SIZE)
-        chunk_limit = 0 if is_full_file else (((content_length + CHUNK_SIZE - 1) // CHUNK_SIZE) + 1)
-        bytes_to_skip = 0 if is_full_file else (start % CHUNK_SIZE)
-        bytes_sent = 0
-        chunk_count = 0
+        # Stream generator following FileToLink ByteStreamer
+        chunk_offset = start // (1024 * 1024)
+        chunk_limit = 0
+        if content_length > 0 and range_header:
+            chunk_limit = ((content_length + (1024 * 1024) - 1) // (1024 * 1024)) + 1
 
-        logger.info(f"⚡ Starting MTProto stream (offset: {chunk_offset}, limit: {chunk_limit})...")
+        async def stream_generator():
+            bytes_sent = 0
+            bytes_to_skip = start % (1024 * 1024)
 
-        try:
-            async for chunk in client_pool.primary_client.stream_media(
-                msg,
-                offset=chunk_offset,
-                limit=chunk_limit
-            ):
-                if bytes_to_skip > 0:
-                    if len(chunk) <= bytes_to_skip:
-                        bytes_to_skip -= len(chunk)
-                        continue
-                    chunk = chunk[bytes_to_skip:]
-                    bytes_to_skip = 0
+            try:
+                async for chunk in client_pool.primary_client.stream_media(
+                    msg,
+                    offset=chunk_offset,
+                    limit=chunk_limit
+                ):
+                    if bytes_to_skip > 0:
+                        if len(chunk) <= bytes_to_skip:
+                            bytes_to_skip -= len(chunk)
+                            continue
+                        chunk = chunk[bytes_to_skip:]
+                        bytes_to_skip = 0
 
-                remaining = content_length - bytes_sent
-                if len(chunk) > remaining:
-                    chunk = chunk[:remaining]
+                    remaining = content_length - bytes_sent
+                    if len(chunk) > remaining:
+                        chunk = chunk[:remaining]
 
-                if chunk:
-                    await response.write(chunk)
-                    bytes_sent += len(chunk)
-                    chunk_count += 1
-                    if chunk_count % 10 == 1:
-                        logger.info(f"🚀 Streamed {bytes_sent / (1024*1024):.2f} MB / {content_length / (1024*1024):.2f} MB")
+                    if chunk:
+                        yield chunk
+                        bytes_sent += len(chunk)
 
-                if bytes_sent >= content_length:
-                    break
+                    if bytes_sent >= content_length:
+                        break
 
-            await response.write_eof()
-            logger.info(f"✅ Stream complete for {file_name} ({bytes_sent} bytes sent)")
+            except (asyncio.CancelledError, ConnectionResetError):
+                pass
+            except Exception as e:
+                logger.error(f"Stream error on msg {message_id}: {e}")
 
-        except (asyncio.CancelledError, ConnectionResetError):
-            logger.info(f"Client closed connection for {file_name}")
-        except Exception as e:
-            logger.error(f"Streaming error on msg {message_id}: {e}", exc_info=True)
-
-        return response
+        return web.Response(
+            status=206 if range_header else 200,
+            body=stream_generator(),
+            headers=headers
+        )
