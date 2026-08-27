@@ -124,7 +124,12 @@ async def render_batch_view(target_msg, results, title: str):
     if len(batch_text_lines) > 15:
         final_msg += f"\n\n*(+ {len(batch_text_lines) - 15} more episodes - tap links above to copy)*"
 
-    await target_msg.edit_text(final_msg, reply_markup=keyboard, disable_web_page_preview=True)
+    try:
+        await target_msg.edit_text(final_msg, reply_markup=keyboard, disable_web_page_preview=True)
+    except MessageNotModified:
+        pass
+    except Exception as e:
+        logger.warning(f"render_batch_view note: {e}")
 
 async def render_single_view(target_msg, item):
     """Renders single movie/video card with Direct Link for StreamHub & Web Player."""
@@ -150,7 +155,12 @@ async def render_single_view(target_msg, item):
         ]
     ])
 
-    await target_msg.edit_text(text, reply_markup=keyboard, disable_web_page_preview=True)
+    try:
+        await target_msg.edit_text(text, reply_markup=keyboard, disable_web_page_preview=True)
+    except MessageNotModified:
+        pass
+    except Exception as e:
+        logger.warning(f"render_single_view note: {e}")
 
 @Client.on_callback_query(filters.regex(r"^arc:(.+)"))
 async def arc_callback_handler(client: Client, query: CallbackQuery):
