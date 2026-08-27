@@ -18,7 +18,7 @@
 
 ---
 
-[Key Features](#-key-features) | [Architecture](#-system-architecture) | [Deploy to Alwaysdata](#-deploy-on-alwaysdata-free--unlimited-bandwidth) | [Docker Setup](#-docker--docker-compose-deployment) | [API Reference](#-rest-api--streaming-endpoints) | [License](#-license)
+[Key Features](#-key-features) | [Architecture](#-system-architecture) | [Linux VPS Setup](#-linux-vps-deployment-ubuntu--debian) | [Docker Setup](#-docker--docker-compose-deployment) | [API Reference](#-rest-api--streaming-endpoints) | [License](#-license)
 
 ---
 
@@ -34,7 +34,7 @@
     </td>
     <td width="50%">
       <h3>🔍 Instant Search & Batch Links</h3>
-      Search any movie or anime (<code>/search 86</code> or type in PM). Groups anime/series into a clean <b>Batch Episode List</b> with a 1-click <b>📋 Copy All Batch Links</b> button!
+      Search any movie or anime (<code>/search 86</code> or type in PM). Groups anime/series into a clean <b>Batch Episode List</b> with a 1-click <b>📋 Copy All Direct Links</b> button!
     </td>
   </tr>
   <tr>
@@ -54,7 +54,7 @@
     </td>
     <td width="50%">
       <h3>💾 Ultra-Low RAM Footprint</h3>
-      Direct generator chunk piping operates at <b>~60 MB – 90 MB RAM</b>, running flawlessly inside low-memory servers (like Alwaysdata's 256MB free tier).
+      Direct generator chunk piping operates at <b>~60 MB – 90 MB RAM</b>, running flawlessly inside low-spec micro VPS instances.
     </td>
   </tr>
 </table>
@@ -65,7 +65,7 @@
 
 ```mermaid
 graph LR
-    User[📱 StreamHub App / ExoPlayer / VLC] -->|HTTP 206 Range Stream| WebServer[🌐 aiohttp Async Server]
+    User[📱 StreamHub App / ExoPlayer / VLC] -->|HTTP 206 Direct Stream| WebServer[🌐 aiohttp Async Server]
     WebServer --> LRU[🧠 In-Memory LRU Cache]
     LRU -.->|Cache Miss| Pool[⚡ Multi-Client Pyrofork Pool]
     Pool -->|Parallel MTProto Chunks| TG[(☁️ Telegram DC Servers)]
@@ -87,7 +87,7 @@ OmniArchiver-F2L/
 │   │   ├── cache.py            # In-memory LRU ring buffer for 0ms header probing
 │   │   └── file_properties.py  # Media metadata & MIME resolver
 │   ├── server/
-│   │   ├── routes.py           # HTTP endpoints (/stream, /dl, /watch, /api/v1/search)
+│   │   ├── routes.py           # HTTP endpoints (/dl, /stream, /playlist, /watch, /api/v1/search)
 │   │   ├── stream_handler.py   # RFC 7233 Range request & MTProto chunk streamer
 │   │   ├── web_server.py       # aiohttp app factory with universal CORS
 │   │   └── templates/          # Modern Plyr.js dark web player & status dashboard
@@ -113,31 +113,53 @@ OmniArchiver-F2L/
 
 ## 🚀 Quickstart & Deployment Guides
 
-### 1️⃣ Deploy on Alwaysdata (Free & Unlimited Bandwidth)
+### 1️⃣ Linux VPS Deployment (Ubuntu / Debian / CentOS)
 
-Alwaysdata provides **1 GB SSD and unmetered bandwidth** without requiring a credit card:
+```bash
+# 1. Update and install Python 3.11 & build tools
+sudo apt update && sudo apt install -y python3 python3-pip python3-venv git build-essential
 
-1. In your **Alwaysdata Admin Dashboard** → **Web** → **Sites**:
-   - **Type:** `Custom program`
-   - **Command:** `python3 main.py`
-   - **Working directory:** `/home/your_username/OmniArchiver-F2L`
-2. Connect via SSH:
-   ```bash
-   ssh your_username@ssh-your_username.alwaysdata.net
-   ```
-3. Clone and install dependencies:
-   ```bash
-   git clone https://github.com/WorkerOfArea51/OmniArchiver-F2L.git
-   cd OmniArchiver-F2L
-   pip install -r requirements.txt
-   ```
-4. Create `.env`:
-   ```bash
-   cp .env.example .env
-   nano .env  # Add your API_ID, API_HASH, BOT_TOKEN, and CHANNELS (-100xxx,-100yyy,-100zzz)
-   ```
-5. Restart your site from the dashboard—your streaming server is live at `https://your_username.alwaysdata.net`!
-6. Open your Telegram Bot and send **`/index`** to index all your existing channel movies & anime!
+# 2. Clone the repository
+git clone https://github.com/WorkerOfArea51/OmniArchiver-F2L.git
+cd OmniArchiver-F2L
+
+# 3. Create virtual environment & install requirements
+python3 -m venv venv
+source venv/bin/activate
+pip install --upgrade pip
+pip install -r requirements.txt
+
+# 4. Configure environment
+cp .env.example .env
+nano .env  # Add your API_ID, API_HASH, BOT_TOKEN, and CHANNELS
+
+# 5. Run with Python or PM2
+python3 main.py
+```
+
+#### Running 24/7 with PM2:
+```bash
+sudo npm install -g pm2
+pm2 start main.py --name "omniarchiver" --interpreter ./venv/bin/python3
+pm2 save && pm2 startup
+```
+
+---
+
+### 2️⃣ Docker / Docker Compose Deployment
+
+```bash
+# 1. Clone the repository
+git clone https://github.com/WorkerOfArea51/OmniArchiver-F2L.git
+cd OmniArchiver-F2L
+
+# 2. Configure environment
+cp .env.example .env
+nano .env
+
+# 3. Run with Docker Compose
+docker compose up -d --build
+```
 
 ---
 
@@ -150,7 +172,7 @@ Alwaysdata provides **1 GB SSD and unmetered bandwidth** without requiring a cre
 | `BOT_TOKEN` | **Yes** | Primary Telegram Bot Token from [@BotFather](https://t.me/BotFather) | — |
 | `CHANNELS` | **Yes** | Comma-separated list of your channel IDs (`-100xxx,-100yyy,-100zzz`) | — |
 | `MULTI_TOKENS` | *No* | Comma-separated auxiliary bot tokens for multi-worker parallel speed | `""` |
-| `BASE_URL` | *No* | Public domain/host (e.g. `streamhub69.alwaysdata.net`) | `0.0.0.0:8080` |
+| `BASE_URL` | *No* | Public domain or IP (e.g. `your-domain.com` or `123.45.67.89:8080`) | `0.0.0.0:8080` |
 | `PORT` | *No* | Internal web server port | `8080` |
 | `BIND_ADDRESS` | *No* | Internal bind IP address | `0.0.0.0` |
 | `OWNER_ID` | *No* | Numeric Telegram user ID for admin command authorization | `0` |
@@ -165,9 +187,9 @@ Alwaysdata provides **1 GB SSD and unmetered bandwidth** without requiring a cre
 
 | Endpoint | Method | Description |
 | :--- | :---: | :--- |
-| `/stream/{channel_id}/{id}` | `GET` | Raw binary stream with full **HTTP 206 Range seeking** (ExoPlayer/VLC/mpv) |
-| `/watch/{channel_id}/{id}` | `GET` | Embedded **Plyr.js** dark glassmorphic web player |
-| `/dl/{channel_id}/{id}` | `GET` | Direct attachment download link |
+| `/dl/{channel_id}/{id}` | `GET` | Direct binary stream with full **HTTP 206 Range seeking** (StreamHub / ExoPlayer / VLC / Downloads) |
+| `/playlist/{series_name}.m3u` | `GET` | Dynamic M3U playlist file for entire anime arcs / seasons |
+| `/watch/{channel_id}/{id}` | `GET` | Embedded **Plyr.js** dark web player for browsers |
 | `/api/v1/search?q={query}` | `GET` | JSON search endpoint returning movies & anime with stream URLs |
 | `/health` | `GET` | Uptime and active worker pool liveness monitor |
 
@@ -180,7 +202,7 @@ Alwaysdata provides **1 GB SSD and unmetered bandwidth** without requiring a cre
 - `/search <query>` — Search for a movie or anime batch (or just type title in bot PM).
 - `/stats` — Real-time RAM, CPU, worker sessions, and indexed file statistics *(Admin)*.
 - `/status` — Quick operational health check.
-- `/del <msg_id>` — Delete a media file from the storage archive *(Admin)*.
+- `/del <msg_id>` — Delete a media file from the storage archive and search index *(Admin)*.
 - `/ping` — Measure bot latency and server response time.
 
 ---
