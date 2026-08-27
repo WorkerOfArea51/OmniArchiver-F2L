@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 import asyncio
 import logging
-from typing import List
+from typing import List, Dict, Tuple
 from pyrogram import Client
 from pyrogram.errors import FloodWait
 from bot.core.config import Config
@@ -10,12 +10,12 @@ logger = logging.getLogger("ClientPool")
 
 class ClientPoolManager:
     """
-    High-Performance Multi-Client Engine patterned after FileToLink/Thunder.
+    High-Performance Multi-Client Workload Balancer patterned after FileToLink/Thunder.
     """
 
     def __init__(self):
         self.clients: List[Client] = []
-        self._current_index = 0
+        self.work_loads: Dict[int, int] = {}
         self.primary_client: Client = None
 
     async def initialize(self):
@@ -40,6 +40,7 @@ class ClientPoolManager:
             await self.primary_client.start()
 
         self.clients.append(self.primary_client)
+        self.work_loads[0] = 0
         me = await self.primary_client.get_me()
         logger.info(f"Primary Bot online: @{me.username} [{me.id}]")
 
@@ -52,7 +53,6 @@ class ClientPoolManager:
                     logger.info(f"✅ Storage channel cached: {getattr(chat, 'title', 'Channel')} [{ch_id}]")
                 except Exception as e:
                     logger.warning(f"Note on channel {ch_id}: {e}")
-
 
         # Initialize auxiliary workers for dedicated MTProto streaming
         if Config.MULTI_TOKENS:
@@ -79,27 +79,36 @@ class ClientPoolManager:
 
                     w_me = await worker.get_me()
                     logger.info(f"⚡ Stream Worker {idx} online: @{w_me.username}")
-                    return worker
+                    return idx, worker
                 except Exception as e:
                     logger.error(f"Worker {idx} startup note: {e}")
-                    return None
+                    return idx, None
 
             started_workers = await asyncio.gather(
                 *[start_worker(i, t) for i, t in enumerate(Config.MULTI_TOKENS, start=1)]
             )
-            for w in started_workers:
+            for idx, w in started_workers:
                 if w:
                     self.clients.append(w)
+                    self.work_loads[len(self.clients) - 1] = 0
 
         logger.info(f"🚀 Client Pool active with {len(self.clients)} high-speed session(s)!")
 
-    def get_client(self) -> Client:
-        """Returns next client in round-robin sequence to distribute download bandwidth."""
+    def select_optimal_client(self) -> Tuple[int, Client]:
+        """Selects client with lowest active streaming workload."""
         if not self.clients:
-            return self.primary_client
-        client = self.clients[self._current_index % len(self.clients)]
-        self._current_index += 1
-        return client
+            return 0, self.primary_client
+        
+        # Pick client with lowest load
+        best_id = min(self.work_loads.keys(), key=lambda k: self.work_loads.get(k, 0))
+        return best_id, self.clients[best_id]
+
+    def increment_load(self, client_id: int):
+        self.work_loads[client_id] = self.work_loads.get(client_id, 0) + 1
+
+    def decrement_load(self, client_id: int):
+        if client_id in self.work_loads and self.work_loads[client_id] > 0:
+            self.work_loads[client_id] -= 1
 
     async def stop_all(self):
         logger.info("Stopping all Pyrofork clients...")

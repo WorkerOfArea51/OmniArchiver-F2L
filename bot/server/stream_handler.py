@@ -12,7 +12,7 @@ from bot.core.file_properties import get_file_details, get_media_from_message
 
 logger = logging.getLogger("StreamHandler")
 
-CHUNK_SIZE = 1024 * 1024  # 1 MiB MTProto standard block
+CHUNK_SIZE = 1024 * 1024  # 1 MiB MTProto block
 RANGE_REGEX = re.compile(r"^bytes=(?P<start>\d*)-(?P<end>\d*)$")
 
 CORS_HEADERS = {
@@ -52,7 +52,7 @@ def parse_range_header(range_header: str, file_size: int) -> tuple[int, int]:
 
 class StreamHandler:
     """
-    ByteStreamer Engine directly patterned after fyaz05/FileToLink (Thunder).
+    Workload-Balanced ByteStreamer Engine (1:1 with fyaz05/FileToLink).
     """
 
     @classmethod
@@ -74,12 +74,17 @@ class StreamHandler:
         if not target_channel:
             raise web.HTTPNotFound(text="Target channel not configured.", headers=CORS_HEADERS)
 
-        # Get message from Telegram
+        # Select client with lowest workload
+        client_id, stream_client = client_pool.select_optimal_client()
+
+        # Fetch message metadata
         try:
+            msg = await stream_client.get_messages(target_channel, message_id)
+        except Exception:
+            # Fallback to primary client with verified channel rights
             msg = await client_pool.primary_client.get_messages(target_channel, message_id)
-        except Exception as e:
-            logger.error(f"Error fetching message {message_id} from {target_channel}: {e}")
-            raise web.HTTPNotFound(text="File not found in storage channel.", headers=CORS_HEADERS)
+            stream_client = client_pool.primary_client
+            client_id = 0
 
         if not msg or msg.empty:
             raise web.HTTPNotFound(text="Message is empty or deleted.", headers=CORS_HEADERS)
@@ -115,20 +120,21 @@ class StreamHandler:
         if range_header:
             headers["Content-Range"] = f"bytes {start}-{end}/{file_size}"
 
-        # Fast HEAD response for players and download managers
+        # Fast HEAD response
         if request.method == "HEAD":
             return web.Response(
                 status=206 if range_header else 200,
                 headers=headers
             )
 
-        # Background statistics
+        # Track stats
         if as_download:
             asyncio.create_task(db.increment_downloads(target_channel, message_id))
         else:
             asyncio.create_task(db.increment_views(target_channel, message_id))
 
-        # Stream generator following FileToLink ByteStreamer
+        client_pool.increment_load(client_id)
+
         chunk_offset = start // (1024 * 1024)
         chunk_limit = 0
         if content_length > 0 and range_header:
@@ -139,7 +145,7 @@ class StreamHandler:
             bytes_to_skip = start % (1024 * 1024)
 
             try:
-                async for chunk in client_pool.primary_client.stream_media(
+                async for chunk in stream_client.stream_media(
                     msg,
                     offset=chunk_offset,
                     limit=chunk_limit
@@ -165,7 +171,9 @@ class StreamHandler:
             except (asyncio.CancelledError, ConnectionResetError):
                 pass
             except Exception as e:
-                logger.error(f"Stream error on msg {message_id}: {e}")
+                logger.error(f"Stream error on client {client_id}: {e}")
+            finally:
+                client_pool.decrement_load(client_id)
 
         return web.Response(
             status=206 if range_header else 200,
