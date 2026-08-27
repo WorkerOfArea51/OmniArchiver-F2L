@@ -1,4 +1,5 @@
-﻿import re
+# -*- coding: utf-8 -*-
+import re
 import asyncio
 import logging
 from pyrogram import Client, filters
@@ -20,7 +21,6 @@ def parse_header_post(caption: str):
 
     first_line = caption.split("\n")[0].replace("🎬", "").strip()
 
-    # If format is "Series : Arc Name" or "Series - Arc Name"
     if ":" in first_line:
         parts = first_line.split(":", 1)
         series_name = parts[0].strip()
@@ -47,7 +47,9 @@ def extract_episode_num(text: str, filename: str):
 
 @Client.on_message(filters.command("index") & filters.private)
 async def index_channels_cmd(client: Client, message: Message):
-    """Indexes past messages and arcs from all configured channels into the database."""
+    """
+    Indexes channel history using bot-compatible get_messages batch scanning.
+    """
     user_id = message.from_user.id if message.from_user else 0
     if Config.OWNER_ID and user_id != Config.OWNER_ID and user_id not in Config.AUTH_USERS:
         await message.reply_text("⛔ **Admin Only:** You do not have permission to run indexer.")
@@ -57,46 +59,76 @@ async def index_channels_cmd(client: Client, message: Message):
         await message.reply_text("❌ No channels configured in `CHANNELS` env variable.")
         return
 
-    status_msg = await message.reply_text("⏳ **Starting Channel Arc & Episode Indexing...**\nThis may take a moment.")
+    status_msg = await message.reply_text("⏳ **Starting Channel Arc & Episode Indexing...**\nScanning past media...")
     total_indexed = 0
-    current_series = ""
-    current_arc = ""
+    BATCH_SIZE = 100
 
     for channel_id in Config.CHANNELS:
         try:
-            await status_msg.edit_text(f"🔍 Scanning Channel: `{channel_id}`...")
-            async for post in client.get_chat_history(channel_id):
-                caption = post.caption or post.text or ""
+            await status_msg.edit_text(f"🔍 **Scanning Channel:** `{channel_id}`...\nIndexed: `{total_indexed}` files")
+            
+            # Find the approximate latest message ID by sending a dummy message and deleting it
+            try:
+                dummy = await client.send_message(channel_id, "🔍 *Indexing channel...*")
+                max_id = dummy.id
+                await dummy.delete()
+            except Exception:
+                # If send_message permission isn't granted, probe up to 10,000
+                max_id = 5000
 
-                # Detect Arc / Header Post
-                if "🎬" in caption or "Episodes:" in caption or "Quality:" in caption:
-                    s_name, a_name = parse_header_post(caption)
-                    if s_name:
-                        current_series = s_name
-                        current_arc = a_name if a_name else s_name
+            current_series = ""
+            current_arc = ""
+            
+            # Scan in chunks of 100 from ID 1 up to max_id
+            for start_id in range(1, max_id + 1, BATCH_SIZE):
+                ids_to_fetch = list(range(start_id, min(start_id + BATCH_SIZE, max_id + 1)))
+                try:
+                    messages = await client.get_messages(channel_id, message_ids=ids_to_fetch)
+                except Exception as e:
+                    logger.warning(f"Error fetching batch {start_id}-{start_id+BATCH_SIZE} for {channel_id}: {e}")
+                    continue
 
-                media = get_media_from_message(post)
-                if media:
-                    file_name, file_size, mime_type, _ = get_file_details(post)
-                    ep_num = extract_episode_num(caption, file_name)
+                if not isinstance(messages, list):
+                    messages = [messages]
 
-                    await db.add_file(
-                        channel_id=channel_id,
-                        message_id=post.id,
-                        file_name=file_name,
-                        file_size=file_size,
-                        mime_type=mime_type,
-                        caption=caption,
-                        series_name=current_series,
-                        arc_name=current_arc,
-                        episode_num=ep_num
-                    )
-                    total_indexed += 1
+                for post in messages:
+                    if not post or post.empty:
+                        continue
 
-                await asyncio.sleep(0.04)
+                    caption = post.caption or post.text or ""
+
+                    # Detect Arc / Header Post
+                    if "🎬" in caption or "Episodes:" in caption or "Quality:" in caption:
+                        s_name, a_name = parse_header_post(caption)
+                        if s_name:
+                            current_series = s_name
+                            current_arc = a_name if a_name else s_name
+
+                    media = get_media_from_message(post)
+                    if media:
+                        file_name, file_size, mime_type, _ = get_file_details(post)
+                        ep_num = extract_episode_num(caption, file_name)
+
+                        await db.add_file(
+                            channel_id=channel_id,
+                            message_id=post.id,
+                            file_name=file_name,
+                            file_size=file_size,
+                            mime_type=mime_type,
+                            caption=caption,
+                            series_name=current_series,
+                            arc_name=current_arc,
+                            episode_num=ep_num
+                        )
+                        total_indexed += 1
+
+                if start_id % 500 == 1:
+                    await status_msg.edit_text(f"🔍 **Scanning Channel:** `{channel_id}`\nProcessed IDs: `{start_id}/{max_id}`\nIndexed Media: `{total_indexed}`")
+
+                await asyncio.sleep(0.05)
 
         except Exception as e:
-            logger.error(f"Error indexing channel {channel_id}: {e}")
+            logger.error(f"Error indexing channel {channel_id}: {e}", exc_info=True)
             await message.reply_text(f"⚠️ Error on channel `{channel_id}`: `{str(e)}`")
 
     await status_msg.edit_text(
