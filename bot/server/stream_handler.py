@@ -9,9 +9,9 @@ from bot.core.client_pool import client_pool
 from bot.core.database import db
 from bot.core.file_properties import get_file_details, get_media_from_message
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("StreamHandler")
 
-CHUNK_SIZE = 1024 * 1024  # 1 MiB MTProto standard block
+CHUNK_SIZE = 1024 * 1024  # 1 MiB MTProto block
 RANGE_REGEX = re.compile(r"^bytes=(?P<start>\d*)-(?P<end>\d*)$")
 
 CORS_HEADERS = {
@@ -50,7 +50,7 @@ def parse_range_header(range_header: str, file_size: int) -> tuple[int, int]:
     return start, end
 
 class StreamHandler:
-    """Zero-RAM Direct HTTP Stream & Download Engine for Telegram Media."""
+    """Production Zero-RAM Direct HTTP Stream & Download Engine with Real-Time Logging."""
 
     @classmethod
     async def serve(
@@ -60,6 +60,8 @@ class StreamHandler:
         channel_id: int = None,
         as_download: bool = False
     ) -> web.StreamResponse:
+        logger.info(f"➡️ [HTTP {request.method}] Request for msg {message_id} on channel {channel_id} (Download: {as_download})")
+
         target_channel = channel_id
         if not target_channel:
             record = await db.get_file(message_id)
@@ -69,21 +71,28 @@ class StreamHandler:
                 target_channel = Config.CHANNELS[0]
 
         if not target_channel:
+            logger.error("Target channel not found or configured.")
             raise web.HTTPNotFound(text="Target channel not configured.", headers=CORS_HEADERS)
 
-        # Use primary client to fetch message safely
+        # 1. Fetch message via primary client
         try:
             msg = await client_pool.primary_client.get_messages(target_channel, message_id)
         except Exception as e:
             logger.error(f"Error fetching message {message_id} from {target_channel}: {e}")
-            raise web.HTTPNotFound(text="File not found in storage channel.", headers=CORS_HEADERS)
+            raise web.HTTPNotFound(text=f"Telegram message error: {e}", headers=CORS_HEADERS)
+
+        if not msg or msg.empty:
+            logger.error(f"Message {message_id} is empty or deleted.")
+            raise web.HTTPNotFound(text="Message is empty or deleted.", headers=CORS_HEADERS)
 
         media = get_media_from_message(msg)
         if not media:
+            logger.error(f"Message {message_id} contains no downloadable media.")
             raise web.HTTPNotFound(text="Message contains no streamable media.", headers=CORS_HEADERS)
 
         file_name, file_size, mime_type, _ = get_file_details(msg)
         if file_size == 0:
+            logger.error(f"File size for {file_name} is reported as 0.")
             raise web.HTTPNotFound(text="File size is reported as zero.", headers=CORS_HEADERS)
 
         range_header = request.headers.get("Range", "")
@@ -108,30 +117,33 @@ class StreamHandler:
         if range_header:
             headers["Content-Range"] = f"bytes {start}-{end}/{file_size}"
 
-        # Initialize StreamResponse (Immediate header delivery to download manager/browser)
+        logger.info(f"📦 Serving {file_name} ({content_length} bytes, Status: {status})")
+
         response = web.StreamResponse(status=status, headers=headers)
         await response.prepare(request)
 
-        # Fast HEAD response
+        # Immediate return on HEAD
         if request.method == "HEAD":
+            logger.info("HEAD response sent.")
             return response
 
-        # Track statistics in background
+        # Background stats
         if as_download:
             asyncio.create_task(db.increment_downloads(target_channel, message_id))
         else:
             asyncio.create_task(db.increment_views(target_channel, message_id))
 
-        # Select worker client for downloading stream
-        stream_client = client_pool.primary_client
-
+        # MTProto streaming
         chunk_offset = 0 if is_full_file else (start // CHUNK_SIZE)
         chunk_limit = 0 if is_full_file else (((content_length + CHUNK_SIZE - 1) // CHUNK_SIZE) + 1)
         bytes_to_skip = 0 if is_full_file else (start % CHUNK_SIZE)
         bytes_sent = 0
+        chunk_count = 0
+
+        logger.info(f"⚡ Starting MTProto stream (offset: {chunk_offset}, limit: {chunk_limit})...")
 
         try:
-            async for chunk in stream_client.stream_media(
+            async for chunk in client_pool.primary_client.stream_media(
                 msg,
                 offset=chunk_offset,
                 limit=chunk_limit
@@ -150,15 +162,19 @@ class StreamHandler:
                 if chunk:
                     await response.write(chunk)
                     bytes_sent += len(chunk)
+                    chunk_count += 1
+                    if chunk_count % 10 == 1:
+                        logger.info(f"🚀 Streamed {bytes_sent / (1024*1024):.2f} MB / {content_length / (1024*1024):.2f} MB")
 
                 if bytes_sent >= content_length:
                     break
 
             await response.write_eof()
+            logger.info(f"✅ Stream complete for {file_name} ({bytes_sent} bytes sent)")
 
         except (asyncio.CancelledError, ConnectionResetError):
-            pass
+            logger.info(f"Client closed connection for {file_name}")
         except Exception as e:
-            logger.debug(f"Streaming error on msg {message_id}: {e}")
+            logger.error(f"Streaming error on msg {message_id}: {e}", exc_info=True)
 
         return response
