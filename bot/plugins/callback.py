@@ -1,7 +1,8 @@
 from hydrogram.types import CallbackQuery
-from bot import TelegramBot
+from bot.clients import TelegramBot
+from bot.config import Telegram
+from bot.database.files import get_file, delete_file
 from bot.modules.decorators import verify_user
-from bot.modules.static import *
 from bot.modules.telegram import get_message
 
 @TelegramBot.on_callback_query()
@@ -10,22 +11,35 @@ async def manage_callback(bot, q: CallbackQuery):
     query = q.data
 
     if query.startswith('rm_'):
-        sq = query.split('_')
-
-        if len(sq) != 3:
-            return await q.answer(InvalidQueryText, show_alert=True)
-
-        message = await get_message(int(sq[1]))
-
-        if not message:
-            return await q.answer(MessageNotExist, show_alert=True)
+        code = query[3:]
+        doc = await get_file(code)
         
-        sc = message.caption.split('/')
+        if not doc:
+            return await q.answer("File link does not exist or was already revoked.", show_alert=True)
 
-        if q.from_user.id != int(sc[1]) or sq[2] != sc[0]:
-            return await q.answer(InvalidQueryText, show_alert=True)
+        user_id = q.from_user.id
+        owner_or_admin = (user_id in Telegram.ADMIN_IDS) or (user_id == doc.get('user_id'))
+
+        if not owner_or_admin:
+            return await q.answer("❌ You are not authorized to revoke this link.", show_alert=True)
+
+        # Delete database record
+        await delete_file(code)
         
-        await message.delete()
-        await q.answer(LinkRevokedText, show_alert=True)
+        # If it was a direct file uploaded to the bin channel, optionally delete channel message
+        if doc.get('category') == 'direct_files' and doc.get('channel_id') == Telegram.CHANNEL_ID:
+            try:
+                msg = await get_message(doc['channel_id'], doc['message_id'])
+                if msg:
+                    await msg.delete()
+            except Exception:
+                pass
+
+        try:
+            await q.message.edit_text(f"🗑️ **Link Revoked**\nThe file `{doc.get('file_name', '')}` has been removed from the database.")
+        except Exception:
+            pass
+
+        await q.answer("✅ Link permanently revoked!", show_alert=True)
     else:
-        await q.answer(InvalidQueryText, show_alert=True)
+        await q.answer("Invalid query.", show_alert=True)

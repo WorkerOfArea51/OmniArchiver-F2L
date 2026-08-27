@@ -1,115 +1,169 @@
 <div align="center"><h1>🌐 OmniArchiver-F2L</h1>
-<b>An open-source Python Telegram bot to transmit Telegram files over HTTP (Stream & Direct Download).</b>
+<b>A high-performance Python Telegram bot to generate permanent HTTP Stream & Direct Download links from your Telegram channels without duplicating files, powered by MongoDB and Multi-Bot parallel streaming.</b>
 </div><br>
 
 ## **📑 INDEX**
 
+* [**✨ Features**](#features)
 * [**⚙️ Installation**](#installation)
-  * [Python & Git](#i-1)
-  * [Download](#i-2)
-  * [Requirements](#i-3)
 * [**📝 Variables**](#variables)
+* [**🎮 Commands & Usage**](#commands)
 * [**🕹 Deployment**](#deployment)
-  * [Locally](#d-1)
-  * [Docker](#d-2)
-  * [Alwaysdata](#d-3)
+  * [Alwaysdata Deployment](#d-alwaysdata)
+  * [Local Deployment](#d-local)
+  * [Docker Deployment](#d-docker)
 * [**❤️ Credits**](#credits)
+
+---
+
+<a name="features"></a>
+
+## ✨ Features
+
+- **🚀 Multi-Bot Worker Pool:** Support for multiple bot tokens to parallelize chunk transmissions and eliminate streaming bottlenecks.
+- **🗄️ Organized MongoDB Storage:** Neatly partitions data into separate collections (`movies`, `anime`, `webseries`, `direct_files`).
+- **🚫 Zero File Duplication:** Directly indexes files from your existing channels without needing a storage bin channel.
+- **🎬 `/link` Command:** Generate instant permanent stream & download links for single movies/files from any channel.
+- **📺 `/batch` Command:** Batch index full Anime or Web Series seasons by specifying start and end message links.
+- **👥 `AUTH_USERS` Permissions:** Multi-admin support allowing designated users full access to manage and index files.
+- **⚡ Hardware Accelerated:** Powered by `tgcrypto` and asynchronous chunk streaming (`Quart`/`Uvicorn`).
+
+---
 
 <a name="installation"></a>
 
 ## ⚙️ Installation
 
-<a name="i-1"></a>
-
-**1. Install Python & Git:**
-
-For Windows:
-```
-winget install Python.Python.3.11
-winget install Git.Git
-```
-For Linux:
-```
-sudo apt-get update && sudo apt-get install -y python3.11 git python3-pip
-```
-For MacOS:
-```
-brew install python@3.11 git
-```
-For Termux:
-```
-pkg install python -y
-pkg install git -y
-```
-
-<a name="i-2"></a>
-
-**2. Download repository:**
-```
+**1. Clone the repository:**
+```bash
 git clone https://github.com/WorkerOfArea51/OmniArchiver-F2L.git
-```
-
-**3. Change Directory:**
-
-```
 cd OmniArchiver-F2L
 ```
 
-<a name="i-3"></a>
-
-**4. Install requirements:**
-
-```
+**2. Create a virtual environment & install requirements:**
+```bash
+python3.11 -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+pip install --upgrade pip
 pip install -r requirements.txt
 ```
+
+---
 
 <a name="variables"></a>
 
 ## 📝 Variables
-**The variables listed below should be defined either in [config.py](https://github.com/WorkerOfArea51/OmniArchiver-F2L/blob/main/bot/config.py) file or as environment variables, depending on your setup.**
-* `API_ID` | `TELEGRAM_API_ID`: API ID of your Telegram account, can be obtained from [My Telegram](https://my.telegram.org). `int`
-* `API_HASH` | `TELEGRAM_API_HASH`: API hash of your Telegram account, can be obtained from [My Telegram](https://my.telegram.org). `str`
-* `OWNER_ID`: ID of your Telegram account, can be obtained by sending **/info** to [@DumpJsonBot](https://t.me/DumpJsonBot) or [@userinfobot](https://t.me/userinfobot). `int`
-* `ALLOWED_USER_IDS`: A list of Telegram account IDs (separated by spaces) that are permitted to use the bot. Leave this field empty to allow anyone to use it. `str`
-* `BOT_USERNAME` | `TELEGRAM_BOT_USERNAME`: Username of your Telegram bot, create one using [@BotFather](https://t.me/BotFather). `str`
-* `BOT_TOKEN` | `TELEGRAM_BOT_TOKEN`: Telegram API token of your bot, can be obtained from [@BotFather](https://t.me/BotFather). `str`
-* `CHANNEL_ID` | `TELEGRAM_CHANNEL_ID`: ID of the channel where bot will forward all files received from users, can be obtained by forwarding any message from channel to [@DumpJsonBot](https://t.me/DumpJsonBot) and looking for `forward_from_chat` key. `int`
-* `SECRET_CODE_LENGTH`: Number of characters that file code should contain, by default `24`. `int`
-* `BASE_URL`: Base URL that bot should use while generating file links, can be FQDN and by default `http://127.0.0.1:8080`. `str`
-* `BIND_ADDRESS`: Bind address for web server, by default `0.0.0.0` to run on all possible addresses. `str`
-* `PORT`: Port for web server to run on, by default `8080`. `int`
+
+Configure these variables in your `.env` file or hosting environment:
+
+| Variable | Required | Description |
+| :--- | :--- | :--- |
+| `TELEGRAM_API_ID` | **Yes** | Telegram API ID from [my.telegram.org](https://my.telegram.org) (`int`) |
+| `TELEGRAM_API_HASH` | **Yes** | Telegram API Hash from [my.telegram.org](https://my.telegram.org) (`str`) |
+| `TELEGRAM_BOT_TOKEN` | **Yes** | Main Telegram bot token from [@BotFather](https://t.me/BotFather) (`str`) |
+| `TELEGRAM_BOT_USERNAME` | **Yes** | Bot username without `@` (`str`) |
+| `MULTI_BOT_TOKENS` | *Optional* | Additional worker bot tokens (space-separated) for parallel stream acceleration |
+| `OWNER_ID` | **Yes** | Your numeric Telegram user ID (`int`) |
+| `AUTH_USERS` | *Optional* | Space-separated list of Telegram user IDs with full admin rights |
+| `ALLOWED_USER_IDS` | *Optional* | Allowed user IDs (leave empty to allow everyone) |
+| `TELEGRAM_CHANNEL_ID` | **Yes** | Storage Channel ID (with `-100` prefix) for direct files sent in private DMs |
+| `DATABASE_URL` | **Yes** | MongoDB connection URI (e.g. `mongodb+srv://...` or `mongodb://localhost:27017`) |
+| `DATABASE_NAME` | *Optional* | Database name in MongoDB (default: `OmniArchiver`) |
+| `BASE_URL` | **Yes** | Public FQDN URL (e.g. `https://<account>.alwaysdata.net`) |
+| `BIND_ADDRESS` | *Optional* | Bind address (default: `0.0.0.0`) |
+| `PORT` | *Optional* | Port to listen on (default: `8080`) |
+
+---
+
+<a name="commands"></a>
+
+## 🎮 Commands & Usage
+
+### 🎬 Single Movie Indexing (`/link`)
+Generate a permanent stream and download link for a movie in your channel:
+```text
+/link https://t.me/c/1234567890/42
+```
+*(Or forward a channel post into the bot and reply with `/link`)*
+
+---
+
+### 📺 Anime Batch Indexing (`/batch anime`)
+Index an entire season of Anime episodes into the `anime` collection:
+```text
+/batch anime https://t.me/c/1234567890/10 https://t.me/c/1234567890/22
+```
+
+---
+
+### 🍿 Web Series Batch Indexing (`/batch series`)
+Index Web Series episodes into the `webseries` collection:
+```text
+/batch series https://t.me/c/1234567890/50 https://t.me/c/1234567890/60
+```
+
+---
+
+### 📊 Other Commands
+- `/stats` - View total indexed movies, anime, series, and active bot workers (Admin only).
+- `/log` - Download bot event log file (Admin only).
+- `/privacy` - View privacy policy.
+- `/help` - View command guide.
+
+---
 
 <a name="deployment"></a>
 
 ## 🕹 Deployment
 
-> [!NOTE]
-> This bot is designed for personal use or to share with friends and family.
+<a name="d-alwaysdata"></a>
 
-<a name="d-1"></a>
+### 🌐 Alwaysdata Deployment
 
-**1. Running locally:**
-```
+1. **SSH into Alwaysdata:**
+   ```bash
+   ssh <username>@ssh-<username>.alwaysdata.net
+   ```
+2. **Clone & Setup:**
+   ```bash
+   cd ~
+   git clone https://github.com/WorkerOfArea51/OmniArchiver-F2L.git
+   cd OmniArchiver-F2L
+   python3.11 -m venv venv
+   source venv/bin/activate
+   pip install --upgrade pip
+   pip install -r requirements.txt
+   pip cache purge
+   ```
+3. **Create `start.sh`:**
+   ```bash
+   nano start.sh
+   ```
+   Add your environment exports and run: `exec python -m bot`
+   ```bash
+   chmod +x start.sh
+   ```
+4. **Configure Site in Alwaysdata Dashboard:**
+   - **Type:** `User program`
+   - **Command:** `/home/<username>/OmniArchiver-F2L/start.sh`
+   - **Working directory:** `/home/<username>/OmniArchiver-F2L`
+
+<a name="d-local"></a>
+
+### 💻 Local Run
+```bash
 python -m bot
 ```
 
-<a name="d-2"></a>
+<a name="d-docker"></a>
 
-**2. Using Docker:**
-* Build Docker image:
-```
+### 🐳 Docker
+```bash
 docker build -t omniarchiver-f2l .
-```
-* Run the Docker container:
-```
-docker run -p 8080:8080 omniarchiver-f2l
+docker run -p 8080:8080 --env-file .env omniarchiver-f2l
 ```
 
-<a name="d-3"></a>
-
-**3. Alwaysdata Deployment:**
-* Set up a **User program** site on Alwaysdata pointing to `python -m bot`.
-* Set environment variables in Alwaysdata or through a `start.sh` script.
+---
 
 <a name="credits"></a>
 
