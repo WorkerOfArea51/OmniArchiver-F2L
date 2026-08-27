@@ -20,8 +20,14 @@ class DatabaseManager:
             try:
                 from motor.motor_asyncio import AsyncIOMotorClient
                 self._mongo_client = AsyncIOMotorClient(Config.DATABASE_URL)
-                self._mongo_db = self._mongo_client.get_default_database()
-                logger.info("Successfully connected to MongoDB.")
+                try:
+                    self._mongo_db = self._mongo_client.get_default_database()
+                except Exception:
+                    self._mongo_db = self._mongo_client["omni_archiver"]
+                
+                # Test connection
+                await self._mongo_db.command("ping")
+                logger.info("Successfully connected and authenticated to MongoDB Atlas.")
             except Exception as e:
                 logger.error(f"MongoDB connection failed: {e}. Falling back to SQLite.")
                 self.is_mongo = False
