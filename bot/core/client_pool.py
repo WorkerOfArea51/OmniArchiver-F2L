@@ -21,8 +21,7 @@ class ClientPoolManager:
 
     async def initialize(self):
         """Initializes primary bot and all auxiliary workers with disk session persistence."""
-        session_dir = os.path.join(Config.WORKDIR, "sessions")
-        os.makedirs(session_dir, exist_ok=True)
+        
 
         logger.info("Initializing primary bot client...")
         self.primary_client = Client(
@@ -33,7 +32,7 @@ class ClientPoolManager:
             plugins=dict(root="bot/plugins"),
             sleep_threshold=Config.SLEEP_THRESHOLD,
             workers=Config.WORKERS,
-            workdir=session_dir
+            workdir=Config.WORKDIR
         )
 
         try:
@@ -60,7 +59,7 @@ class ClientPoolManager:
                         bot_token=token,
                         sleep_threshold=Config.SLEEP_THRESHOLD,
                         workers=2,
-                        workdir=session_dir
+                        workdir=Config.WORKDIR
                     )
                     await worker.start()
                     self.clients.append(worker)
