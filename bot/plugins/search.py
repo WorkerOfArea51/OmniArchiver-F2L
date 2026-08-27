@@ -1,4 +1,5 @@
-﻿import logging
+import logging
+import urllib.parse
 from pyrogram import Client, filters
 from pyrogram.types import (
     Message,
@@ -32,18 +33,16 @@ async def direct_text_search(client: Client, message: Message):
 async def execute_search(client: Client, message: Message, query: str):
     search_msg = await message.reply_text(f"🔍 *Searching for:* `{query}`...")
 
-    # 1. Check if query matches a series with multiple Arcs (e.g. Bleach, Naruto, One Piece)
+    # 1. Check for multi-arc series (Bleach, Naruto, One Piece)
     arcs = await db.get_series_arcs(query)
 
     if len(arcs) > 1:
-        # MULTI-ARC SAGA VIEW
         arc_buttons = []
         for arc in arcs:
             arc_buttons.append([
                 InlineKeyboardButton(f"📁 {arc}", callback_data=f"arc:{arc[:40]}")
             ])
 
-        # Also get all episodes for the full copy button
         all_files = await db.search_files(query, limit=500)
         full_batch_payload = []
         for item in all_files:
@@ -53,19 +52,23 @@ async def execute_search(client: Client, message: Message, query: str):
             dl_url = f"{Config.BASE_URL}/dl/{ch}/{mid}"
             full_batch_payload.append(f"{ep}: {dl_url}")
 
+        playlist_url = f"{Config.BASE_URL}/playlist/{urllib.parse.quote(query.replace(' ', '_'))}.m3u"
+
         keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📺 Single M3U Playlist Link", copy_text=playlist_url)],
             *arc_buttons,
-            [InlineKeyboardButton(f"📋 Copy Entire Series ({len(all_files)} Files)", copy_text="\n".join(full_batch_payload))]
+            [InlineKeyboardButton(f"📋 Copy All ({len(all_files)} Episodes)", copy_text="\n".join(full_batch_payload))]
         ])
 
         text = (
             f"🎬 **{query.title()} — Multi-Arc Series**\n"
             f"📚 **Detected Arcs/Sagas:** `{len(arcs)}`\n"
             f"📦 **Total Episodes:** `{len(all_files)}`\n\n"
-            f"👉 *Select an Arc below to view and copy episode links:* "
+            f"🔗 **Single M3U Playlist:**\n`{playlist_url}`\n\n"
+            f"👉 *Select an Arc below to view episodes or copy links:* "
         )
 
-        await search_msg.edit_text(text, reply_markup=keyboard)
+        await search_msg.edit_text(text, reply_markup=keyboard, disable_web_page_preview=True)
         return
 
     # 2. Regular search across files and individual arcs
@@ -80,18 +83,20 @@ async def execute_search(client: Client, message: Message, query: str):
     if is_series:
         await render_batch_view(search_msg, results, query)
     else:
-        # Single Movie / File View
         await render_single_view(search_msg, results[0])
 
 async def render_batch_view(target_msg, results, title: str):
-    """Renders clean batch view with individual episode buttons and Copy All button."""
+    """Renders clean batch view with M3U link, individual episode buttons, and Copy All button."""
     batch_text_lines = []
     batch_copy_payload = []
     keyboard_buttons = []
 
     series_header = results[0].get("arc_name") or results[0].get("series_name") or title
+    playlist_url = f"{Config.BASE_URL}/playlist/{urllib.parse.quote(series_header.replace(' ', '_'))}.m3u"
+
     batch_text_lines.append(f"🎬 **{series_header}**")
-    batch_text_lines.append(f"📦 **Episodes in this Arc:** `{len(results)}`\n")
+    batch_text_lines.append(f"📦 **Episodes:** `{len(results)}`")
+    batch_text_lines.append(f"📺 **M3U Playlist:** `{playlist_url}`\n")
 
     for item in results:
         ch = item["channel_id"]
@@ -104,7 +109,7 @@ async def render_batch_view(target_msg, results, title: str):
         batch_text_lines.append(f"• **{ep}** ({size})\n  `{dl_url}`")
         batch_copy_payload.append(f"{ep}: {dl_url}")
 
-        if len(keyboard_buttons) < 10:
+        if len(keyboard_buttons) < 8:
             keyboard_buttons.append([
                 InlineKeyboardButton(f"▶️ {ep}", url=stream_url),
                 InlineKeyboardButton("⬇️ Download", url=dl_url)
@@ -113,13 +118,16 @@ async def render_batch_view(target_msg, results, title: str):
     all_batch_links = "\n".join(batch_copy_payload)
 
     keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("📋 Copy Arc Batch Links", copy_text=all_batch_links)],
+        [
+            InlineKeyboardButton("📺 Copy Single M3U Link", copy_text=playlist_url),
+            InlineKeyboardButton("📋 Copy All Links", copy_text=all_batch_links)
+        ],
         *keyboard_buttons
     ])
 
     final_msg = "\n".join(batch_text_lines[:15])
     if len(batch_text_lines) > 15:
-        final_msg += f"\n\n*(+ {len(batch_text_lines) - 15} more episodes - use Copy button below)*"
+        final_msg += f"\n\n*(+ {len(batch_text_lines) - 15} more episodes - use Copy buttons above)*"
 
     await target_msg.edit_text(final_msg, reply_markup=keyboard, disable_web_page_preview=True)
 
