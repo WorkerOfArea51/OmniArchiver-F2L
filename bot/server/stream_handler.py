@@ -1,4 +1,4 @@
-﻿import asyncio
+import asyncio
 import logging
 from typing import Tuple, Optional
 from aiohttp import web

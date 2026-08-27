@@ -1,4 +1,4 @@
-﻿import time
+import time
 import logging
 from typing import Optional, Dict, Any, List
 import aiosqlite
