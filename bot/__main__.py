@@ -37,8 +37,13 @@ async def start_services():
     app = setup_web_server()
     runner = web.AppRunner(app)
     await runner.setup()
-    site = web.TCPSite(runner, host=Config.BIND_ADDRESS, port=Config.PORT)
-    await site.start()
+    try:
+        site = web.TCPSite(runner, host=Config.BIND_ADDRESS, port=Config.PORT)
+        await site.start()
+    except Exception as e:
+        logger.warning(f"Failed binding to {Config.BIND_ADDRESS}:{Config.PORT} ({e}). Falling back to 0.0.0.0:{Config.PORT}")
+        site = web.TCPSite(runner, host="0.0.0.0", port=Config.PORT)
+        await site.start()
 
     logger.info(f"?? Web Server listening at: http://{Config.BIND_ADDRESS}:{Config.PORT}")
     logger.info(f"? Public Endpoint URL: {Config.BASE_URL}")

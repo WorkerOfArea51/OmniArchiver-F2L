@@ -25,7 +25,8 @@ class Config:
         CHANNELS.append(BIN_CHANNEL_ID)
 
     # --- Server Settings ---
-    BIND_ADDRESS = os.environ.get("BIND_ADDRESS", os.environ.get("IP", "0.0.0.0")).strip()
+    # Alwaysdata provides $IP (IPv6/IPv4) and $PORT (e.g. 8100)
+    BIND_ADDRESS = os.environ.get("IP") or os.environ.get("BIND_ADDRESS") or "::"
     PORT = int(os.environ.get("PORT", 8080))
     HAS_SSL = os.environ.get("HAS_SSL", "True").lower() in ("true", "1", "yes")
 
