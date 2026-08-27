@@ -33,7 +33,7 @@ async def direct_text_search(client: Client, message: Message):
 async def execute_search(client: Client, message: Message, query: str):
     search_msg = await message.reply_text(f"🔍 *Searching for:* `{query}`...")
 
-    # 1. Check for multi-arc series (Bleach, Naruto, One Piece)
+    # 1. Check for multi-arc series (e.g. Bleach, Naruto, One Piece)
     arcs = await db.get_series_arcs(query)
 
     if len(arcs) > 1:
@@ -55,29 +55,28 @@ async def execute_search(client: Client, message: Message, query: str):
         playlist_url = f"{Config.BASE_URL}/playlist/{urllib.parse.quote(query.replace(' ', '_'))}.m3u"
 
         keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("📺 Single M3U Playlist Link", copy_text=playlist_url)],
+            [InlineKeyboardButton("📺 Copy Single M3U Link", copy_text=playlist_url)],
             *arc_buttons,
             [InlineKeyboardButton(f"📋 Copy All ({len(all_files)} Episodes)", copy_text="\n".join(full_batch_payload))]
         ])
 
         text = (
             f"🎬 **{query.title()} — Multi-Arc Series**\n"
-            f"📚 **Detected Arcs/Sagas:** `{len(arcs)}`\n"
+            f"📚 **Detected Arcs:** `{len(arcs)}`\n"
             f"📦 **Total Episodes:** `{len(all_files)}`\n\n"
             f"🔗 **Single M3U Playlist:**\n`{playlist_url}`\n\n"
-            f"👉 *Select an Arc below to view episodes or copy links:* "
+            f"👉 *Select an Arc below to get direct links:* "
         )
 
-        await search_msg.edit_text(text, reply_markup=keyboard, disable_web_page_preview=True)
+        await search_msg.edit_text(text, reply_markup=keyboard)
         return
 
-    # 2. Regular search across files and individual arcs
+    # 2. Search for files / specific arc
     results = await db.search_files(query, limit=60)
     if not results:
         await search_msg.edit_text(f"❌ No media found matching `{query}`.\nMake sure your channels are indexed with `/index`.")
         return
 
-    # Check if multiple episodes belonging to one arc/series
     is_series = len(results) > 1 and any(r.get("episode_num") for r in results)
 
     if is_series:
@@ -86,7 +85,7 @@ async def execute_search(client: Client, message: Message, query: str):
         await render_single_view(search_msg, results[0])
 
 async def render_batch_view(target_msg, results, title: str):
-    """Renders clean batch view with M3U link, individual episode buttons, and Copy All button."""
+    """Renders clean batch view with 1 Direct Link per episode, M3U link, and Copy All button."""
     batch_text_lines = []
     batch_copy_payload = []
     keyboard_buttons = []
@@ -95,7 +94,7 @@ async def render_batch_view(target_msg, results, title: str):
     playlist_url = f"{Config.BASE_URL}/playlist/{urllib.parse.quote(series_header.replace(' ', '_'))}.m3u"
 
     batch_text_lines.append(f"🎬 **{series_header}**")
-    batch_text_lines.append(f"📦 **Episodes:** `{len(results)}`")
+    batch_text_lines.append(f"📦 **Total Episodes:** `{len(results)}`")
     batch_text_lines.append(f"📺 **M3U Playlist:** `{playlist_url}`\n")
 
     for item in results:
@@ -103,16 +102,16 @@ async def render_batch_view(target_msg, results, title: str):
         mid = item["message_id"]
         ep = item.get("episode_num") or f"ID {mid}"
         size = humanbytes(item["file_size"])
-        dl_url = f"{Config.BASE_URL}/dl/{ch}/{mid}"
-        stream_url = f"{Config.BASE_URL}/stream/{ch}/{mid}"
+        direct_url = f"{Config.BASE_URL}/dl/{ch}/{mid}"
+        watch_url = f"{Config.BASE_URL}/watch/{ch}/{mid}"
 
-        batch_text_lines.append(f"• **{ep}** ({size})\n  `{dl_url}`")
-        batch_copy_payload.append(f"{ep}: {dl_url}")
+        batch_text_lines.append(f"• **{ep}** ({size})\n  `{direct_url}`")
+        batch_copy_payload.append(f"{ep}: {direct_url}")
 
         if len(keyboard_buttons) < 8:
             keyboard_buttons.append([
-                InlineKeyboardButton(f"▶️ {ep}", url=stream_url),
-                InlineKeyboardButton("⬇️ Download", url=dl_url)
+                InlineKeyboardButton(f"▶️ {ep}", url=watch_url),
+                InlineKeyboardButton("⬇️ Direct Link", copy_text=direct_url)
             ])
 
     all_batch_links = "\n".join(batch_copy_payload)
@@ -120,7 +119,7 @@ async def render_batch_view(target_msg, results, title: str):
     keyboard = InlineKeyboardMarkup([
         [
             InlineKeyboardButton("📺 Copy Single M3U Link", copy_text=playlist_url),
-            InlineKeyboardButton("📋 Copy All Links", copy_text=all_batch_links)
+            InlineKeyboardButton("📋 Copy All Direct Links", copy_text=all_batch_links)
         ],
         *keyboard_buttons
     ])
@@ -132,37 +131,31 @@ async def render_batch_view(target_msg, results, title: str):
     await target_msg.edit_text(final_msg, reply_markup=keyboard, disable_web_page_preview=True)
 
 async def render_single_view(target_msg, item):
-    """Renders single movie/file view."""
+    """Renders single movie/video card with 1 Direct Link for both StreamHub app & downloading."""
     ch = item["channel_id"]
     mid = item["message_id"]
     file_name = item["file_name"]
     size = humanbytes(item["file_size"])
-    stream_url = f"{Config.BASE_URL}/stream/{ch}/{mid}"
-    download_url = f"{Config.BASE_URL}/dl/{ch}/{mid}"
+    direct_link = f"{Config.BASE_URL}/dl/{ch}/{mid}"
     player_url = f"{Config.BASE_URL}/watch/{ch}/{mid}"
 
     text = (
         f"🎬 **{file_name}**\n"
         f"📦 **Size:** `{size}`\n"
         f"🏷️ **MIME:** `{item['mime_type']}`\n\n"
-        f"⬇️ **Direct Download Link:**\n`{download_url}`\n\n"
-        f"🔗 **Direct Stream Link (for StreamHub app):**\n`{stream_url}`"
+        f"🔗 **Direct Link (For StreamHub App & Download):**\n`{direct_link}`\n\n"
+        f"🌐 **Watch Online in Browser:**\n`{player_url}`"
     )
 
     keyboard = InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("▶️ Watch Online", url=player_url),
-            InlineKeyboardButton("⬇️ Fast Download", url=download_url)
-        ],
-        [
-            InlineKeyboardButton("📋 Copy Download Link", copy_text=download_url),
-            InlineKeyboardButton("📋 Copy Stream Link", copy_text=stream_url)
+            InlineKeyboardButton("📋 Copy Direct Link", copy_text=direct_link),
+            InlineKeyboardButton("▶️ Watch Online", url=player_url)
         ]
     ])
 
     await target_msg.edit_text(text, reply_markup=keyboard, disable_web_page_preview=True)
 
-# Callback handler for selecting an Arc from the menu
 @Client.on_callback_query(filters.regex(r"^arc:(.+)"))
 async def arc_callback_handler(client: Client, query: CallbackQuery):
     arc_name = query.data.split(":", 1)[1]
