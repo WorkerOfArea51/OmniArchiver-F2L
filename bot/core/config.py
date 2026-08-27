@@ -1,4 +1,4 @@
-import os
+﻿import os
 import sys
 from dotenv import load_dotenv
 
@@ -9,13 +9,20 @@ class Config:
     API_ID = int(os.environ.get("API_ID", "0"))
     API_HASH = os.environ.get("API_HASH", "").strip()
     BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
-    
-    # Auxiliary multi-token worker pool
+
+    # Multi-client worker pool tokens
     raw_multi_tokens = os.environ.get("MULTI_TOKENS", "").strip()
     MULTI_TOKENS = [t.strip() for t in raw_multi_tokens.split(",") if t.strip()]
 
-    # Private Storage Channel ID
+    # Multiple Channel IDs (Anime, Movie, Web Series, etc.)
+    # Comma-separated list of channel IDs (e.g. -10012345,-10067890,-100112233)
+    raw_channels = os.environ.get("CHANNELS", "").strip()
+    CHANNELS = [int(c.strip()) for c in raw_channels.split(",") if c.strip().lstrip("-").isdigit()]
+
+    # Optional legacy fallback
     BIN_CHANNEL_ID = int(os.environ.get("BIN_CHANNEL_ID", "0"))
+    if BIN_CHANNEL_ID and BIN_CHANNEL_ID not in CHANNELS:
+        CHANNELS.append(BIN_CHANNEL_ID)
 
     # --- Server Settings ---
     BIND_ADDRESS = os.environ.get("BIND_ADDRESS", "0.0.0.0").strip()
@@ -25,14 +32,14 @@ class Config:
     raw_base_url = os.environ.get("BASE_URL", "").strip().rstrip("/")
     if not raw_base_url:
         raw_base_url = f"{BIND_ADDRESS}:{PORT}"
-    
+
     SCHEME = "https" if HAS_SSL else "http"
     if not raw_base_url.startswith(("http://", "https://")):
         BASE_URL = f"{SCHEME}://{raw_base_url}"
     else:
         BASE_URL = raw_base_url
 
-    # --- Access Control & Permissions ---
+    # --- Admin & Permissions ---
     OWNER_ID = int(os.environ.get("OWNER_ID", "0"))
     raw_auth = os.environ.get("AUTH_USERS", "").strip()
     AUTH_USERS = [int(x.strip()) for x in raw_auth.split(",") if x.strip().isdigit()]
@@ -44,12 +51,11 @@ class Config:
     SQLITE_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "omni_archiver.db")
 
     # --- Performance, Streaming & Caching ---
-    CHUNK_SIZE = int(os.environ.get("CHUNK_SIZE", 512 * 1024))  # 512 KB
-    CACHE_SIZE_MB = int(os.environ.get("CACHE_SIZE_MB", 32))    # 32 MB LRU cache
+    CHUNK_SIZE = int(os.environ.get("CHUNK_SIZE", 512 * 1024))
+    CACHE_SIZE_MB = int(os.environ.get("CACHE_SIZE_MB", 32))
     SLEEP_THRESHOLD = int(os.environ.get("SLEEP_THRESHOLD", 60))
     WORKERS = int(os.environ.get("WORKERS", 6))
 
-    # Working Directory
     WORKDIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
     @classmethod
@@ -58,9 +64,9 @@ class Config:
         if not cls.API_ID: missing.append("API_ID")
         if not cls.API_HASH: missing.append("API_HASH")
         if not cls.BOT_TOKEN: missing.append("BOT_TOKEN")
-        if not cls.BIN_CHANNEL_ID: missing.append("BIN_CHANNEL_ID")
+        if not cls.CHANNELS: missing.append("CHANNELS")
 
         if missing:
             print(f"[FATAL] Missing required environment variables: {', '.join(missing)}", file=sys.stderr)
-            print("[INFO] Please create a .env file based on .env.example", file=sys.stderr)
+            print("[INFO] Please configure your .env file with your credentials and channel IDs.", file=sys.stderr)
             sys.exit(1)

@@ -12,8 +12,8 @@
 </p>
 
 <p align="center">
-  <b>A production-grade, low-latency Telegram MTProto streaming proxy built for extreme throughput and low memory.</b><br>
-  Engineered specifically for media streaming apps (<b>StreamHub</b>, ExoPlayer, VLC, mpv, and Web browsers).
+  <b>A production-grade Telegram MTProto streaming proxy & auto-indexing gateway.</b><br>
+  Built specifically for <b>Anime, Movie & Web Series channels</b>, powering <b>StreamHub</b>, ExoPlayer, VLC, and mpv.
 </p>
 
 ---
@@ -27,6 +27,16 @@
 ## 🌟 Highlights & Key Features
 
 <table>
+  <tr>
+    <td width="50%">
+      <h3>📂 Multi-Channel Auto-Indexing</h3>
+      Connects to your <b>Anime, Movie & Web Series channels</b> simultaneously. Runs <code>/index</code> to scan your channel history and auto-indexes new uploads in real-time.
+    </td>
+    <td width="50%">
+      <h3>🔍 Instant Search & Batch Links</h3>
+      Search any movie or anime (<code>/search 86</code> or type in PM). Groups anime/series into a clean <b>Batch Episode List</b> with a 1-click <b>📋 Copy All Batch Links</b> button!
+    </td>
+  </tr>
   <tr>
     <td width="50%">
       <h3>🚀 Multi-Client Worker Pooling</h3>
@@ -45,16 +55,6 @@
     <td width="50%">
       <h3>💾 Ultra-Low RAM Footprint</h3>
       Direct generator chunk piping operates at <b>~60 MB – 90 MB RAM</b>, running flawlessly inside low-memory servers (like Alwaysdata's 256MB free tier).
-    </td>
-  </tr>
-  <tr>
-    <td width="50%">
-      <h3>🗄️ Hybrid Database Layer</h3>
-      Zero-configuration embedded <b>SQLite</b> (<code>omni_archiver.db</code>) with automatic fallback, plus plug-and-play <b>MongoDB</b> support for cloud scaling.
-    </td>
-    <td width="50%">
-      <h3>🎬 Responsive Web Video Player</h3>
-      Includes a built-in dark glassmorphic HTML5 web player powered by <b>Plyr.js</b> with picture-in-picture, speed control, and keyboard shortcuts.
     </td>
   </tr>
 </table>
@@ -87,13 +87,15 @@ OmniArchiver-F2L/
 │   │   ├── cache.py            # In-memory LRU ring buffer for 0ms header probing
 │   │   └── file_properties.py  # Media metadata & MIME resolver
 │   ├── server/
-│   │   ├── routes.py           # HTTP endpoints (/stream, /dl, /watch, /api/v1/info)
+│   │   ├── routes.py           # HTTP endpoints (/stream, /dl, /watch, /api/v1/search)
 │   │   ├── stream_handler.py   # RFC 7233 Range request & MTProto chunk streamer
 │   │   ├── web_server.py       # aiohttp app factory with universal CORS
 │   │   └── templates/          # Modern Plyr.js dark web player & status dashboard
 │   ├── plugins/
 │   │   ├── start.py            # /start, /help, /about, /ping handlers
-│   │   ├── upload.py           # Channel auto-sync, file forwarding & link generator
+│   │   ├── indexer.py          # /index channel history scanner & real-time listener
+│   │   ├── search.py           # /search & batch link copy generator
+│   │   ├── upload.py           # Direct PM upload & forwarding handler
 │   │   └── admin.py            # /stats, /status, /ban, /unban, /del, /restart
 │   ├── __init__.py
 │   └── __main__.py             # Unified async orchestrator
@@ -132,43 +134,10 @@ Alwaysdata provides **1 GB SSD and unmetered bandwidth** without requiring a cre
 4. Create `.env`:
    ```bash
    cp .env.example .env
-   nano .env
+   nano .env  # Add your API_ID, API_HASH, BOT_TOKEN, and CHANNELS (-100xxx,-100yyy,-100zzz)
    ```
 5. Restart your site from the dashboard—your streaming server is live at `https://your_username.alwaysdata.net`!
-
----
-
-### 2️⃣ Docker / Docker Compose Deployment
-
-```bash
-# Clone the repository
-git clone https://github.com/WorkerOfArea51/OmniArchiver-F2L.git
-cd OmniArchiver-F2L
-
-# Configure environment
-cp .env.example .env
-nano .env
-
-# Run with Docker Compose
-docker compose up -d --build
-```
-
----
-
-### 3️⃣ Linux VPS (Ubuntu / Debian)
-
-```bash
-# Setup virtual environment
-python3 -m venv venv
-source venv/bin/activate
-
-# Install dependencies & fast C-crypto
-pip install --upgrade pip
-pip install -r requirements.txt
-
-# Run
-python3 main.py
-```
+6. Open your Telegram Bot and send **`/index`** to index all your existing channel movies & anime!
 
 ---
 
@@ -179,7 +148,7 @@ python3 main.py
 | `API_ID` | **Yes** | Telegram API ID from [my.telegram.org](https://my.telegram.org) | — |
 | `API_HASH` | **Yes** | Telegram API Hash from [my.telegram.org](https://my.telegram.org) | — |
 | `BOT_TOKEN` | **Yes** | Primary Telegram Bot Token from [@BotFather](https://t.me/BotFather) | — |
-| `BIN_CHANNEL_ID` | **Yes** | Storage Channel ID (must start with `-100`) | — |
+| `CHANNELS` | **Yes** | Comma-separated list of your channel IDs (`-100xxx,-100yyy,-100zzz`) | — |
 | `MULTI_TOKENS` | *No* | Comma-separated auxiliary bot tokens for multi-worker parallel speed | `""` |
 | `BASE_URL` | *No* | Public domain/host (e.g. `streamhub69.alwaysdata.net`) | `0.0.0.0:8080` |
 | `PORT` | *No* | Internal web server port | `8080` |
@@ -196,10 +165,10 @@ python3 main.py
 
 | Endpoint | Method | Description |
 | :--- | :---: | :--- |
-| `/stream/{id}` | `GET` | Raw binary stream with full **HTTP 206 Range seeking** (ExoPlayer/VLC/mpv) |
-| `/watch/{id}` | `GET` | Embedded **Plyr.js** dark glassmorphic web player |
-| `/dl/{id}` | `GET` | Direct attachment download link |
-| `/api/v1/info/{id}` | `GET` | JSON metadata endpoint for **StreamHub** Android app integration |
+| `/stream/{channel_id}/{id}` | `GET` | Raw binary stream with full **HTTP 206 Range seeking** (ExoPlayer/VLC/mpv) |
+| `/watch/{channel_id}/{id}` | `GET` | Embedded **Plyr.js** dark glassmorphic web player |
+| `/dl/{channel_id}/{id}` | `GET` | Direct attachment download link |
+| `/api/v1/search?q={query}` | `GET` | JSON search endpoint returning movies & anime with stream URLs |
 | `/health` | `GET` | Uptime and active worker pool liveness monitor |
 
 ---
@@ -207,11 +176,10 @@ python3 main.py
 ## 📜 Bot Commands
 
 - `/start` — Launch the interactive bot control panel.
-- `/help` — View available commands and usage guide.
+- `/index` — Scans and indexes all past movies & episodes across your channels *(Admin)*.
+- `/search <query>` — Search for a movie or anime batch (or just type title in bot PM).
 - `/stats` — Real-time RAM, CPU, worker sessions, and indexed file statistics *(Admin)*.
 - `/status` — Quick operational health check.
-- `/ban <user_id>` — Ban a user from generating stream links *(Admin)*.
-- `/unban <user_id>` — Unban a user *(Admin)*.
 - `/del <msg_id>` — Delete a media file from the storage archive *(Admin)*.
 - `/ping` — Measure bot latency and server response time.
 
