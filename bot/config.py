@@ -27,8 +27,8 @@ class Telegram:
     # Allowed Users for general usage (empty = everyone allowed)
     ALLOWED_USER_IDS = env.get("ALLOWED_USER_IDS", "").split()
     
-    # Storage / Bin Channel ID (for direct user file uploads in DM)
-    CHANNEL_ID = int(env.get("TELEGRAM_CHANNEL_ID", env.get("CHANNEL_ID", env.get("BIN_CHANNEL_ID", -100123456789))))
+    # Optional Storage / Bin Channel ID (Only needed if you upload files directly in private DM)
+    CHANNEL_ID = int(env.get("TELEGRAM_CHANNEL_ID", env.get("CHANNEL_ID", env.get("BIN_CHANNEL_ID", 0))))
     SECRET_CODE_LENGTH = int(env.get("SECRET_CODE_LENGTH", 24))
 
 class Database:

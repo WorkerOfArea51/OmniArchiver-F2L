@@ -20,7 +20,18 @@ from bot.modules.static import MediaLinksText, FileLinksText, get_human_size
 )
 @verify_user
 async def handle_user_file(_, msg: Message):
-    sender_id = msg.from_user.id
+    if not Telegram.CHANNEL_ID or Telegram.CHANNEL_ID == 0:
+        # If user forwards a file from a channel, inform them to use /link
+        if msg.forward_from_chat and msg.forward_from_message_id:
+            return await msg.reply(
+                f"ℹ️ **Channel post detected!**\nUse the link command to index this file without duplication:\n`/link https://t.me/c/{str(msg.forward_from_chat.id).replace('-100', '')}/{msg.forward_from_message_id}`",
+                quote=True
+            )
+        return await msg.reply(
+            "ℹ️ **Direct DM uploads disabled.**\nNo storage bin channel is needed! Simply post files to your channel and use:\n• `/link <channel_message_link>`\n• `/batch <category> <start_link> <end_link>`",
+            quote=True
+        )
+
     status_msg = await msg.reply("⏳ *Processing file and generating links...*", quote=True)
     
     try:
