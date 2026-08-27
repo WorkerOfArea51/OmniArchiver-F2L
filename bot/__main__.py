@@ -1,3 +1,22 @@
+# -*- coding: utf-8 -*-
+import os
+import sys
+import fcntl
+
+# Enforce strictly 1 running instance across the entire server
+_lock_file = None
+def ensure_single_instance():
+    global _lock_file
+    lock_path = os.path.join(os.path.expanduser("~"), ".omni_bot_singleton.lock")
+    _lock_file = open(lock_path, "w")
+    try:
+        fcntl.flock(_lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except (IOError, OSError):
+        print("⚠️ Duplicate instance detected! Another bot process is already active. Exiting cleanly.")
+        sys.exit(0)
+
+ensure_single_instance()
+
 import json
 import asyncio
 import logging
