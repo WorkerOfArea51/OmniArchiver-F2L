@@ -76,7 +76,7 @@ async def start_services():
     runner = web.AppRunner(app)
     await runner.setup()
     # 4. Start Dual IPv4 + IPv6 Web Server for Alwaysdata & VPS
-    port = int(os.environ.get("PORT", 8100))
+    port = int(os.environ.get("PORT", 8080))
     always_ip = os.environ.get("IP")
 
     # Bind specific Alwaysdata IP if provided
