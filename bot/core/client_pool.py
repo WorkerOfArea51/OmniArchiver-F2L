@@ -1,14 +1,17 @@
+# -*- coding: utf-8 -*-
+import os
+import asyncio
 import logging
 from typing import List
 from pyrogram import Client
+from pyrogram.errors import FloodWait
 from bot.core.config import Config
 
 logger = logging.getLogger(__name__)
 
 class ClientPoolManager:
     """
-    Manages primary and auxiliary Pyrofork clients to distribute
-    MTProto download streams across multiple Telegram sessions.
+    Resilient Multi-Client Pool with auto-failover and persistent disk session auth.
     """
 
     def __init__(self):
@@ -17,7 +20,10 @@ class ClientPoolManager:
         self.primary_client: Client = None
 
     async def initialize(self):
-        """Initializes primary bot and all auxiliary multi-token clients."""
+        """Initializes primary bot and all auxiliary workers with disk session persistence."""
+        session_dir = os.path.join(Config.WORKDIR, "sessions")
+        os.makedirs(session_dir, exist_ok=True)
+
         logger.info("Initializing primary bot client...")
         self.primary_client = Client(
             name="OmniArchiver_Primary",
@@ -27,14 +33,22 @@ class ClientPoolManager:
             plugins=dict(root="bot/plugins"),
             sleep_threshold=Config.SLEEP_THRESHOLD,
             workers=Config.WORKERS,
-            in_memory=True
+            workdir=session_dir
         )
-        await self.primary_client.start()
-        self.clients.append(self.primary_client)
-        me = await self.primary_client.get_me()
-        logger.info(f"Primary Bot online: @{me.username} [{me.id}]")
 
-        # Initialize auxiliary workers if configured
+        try:
+            await self.primary_client.start()
+            self.clients.append(self.primary_client)
+            me = await self.primary_client.get_me()
+            logger.info(f"Primary Bot online: @{me.username} [{me.id}]")
+        except FloodWait as fw:
+            logger.error(f"Primary bot login FloodWait: {fw.value}s.")
+            raise fw
+        except Exception as e:
+            logger.error(f"Primary bot failed to start: {e}")
+            raise e
+
+        # Initialize auxiliary workers (fail-safe: if one worker has cooldown, others continue)
         if Config.MULTI_TOKENS:
             logger.info(f"Setting up {len(Config.MULTI_TOKENS)} auxiliary worker clients...")
             for idx, token in enumerate(Config.MULTI_TOKENS, start=1):
@@ -46,14 +60,16 @@ class ClientPoolManager:
                         bot_token=token,
                         sleep_threshold=Config.SLEEP_THRESHOLD,
                         workers=2,
-                        in_memory=True
+                        workdir=session_dir
                     )
                     await worker.start()
                     self.clients.append(worker)
                     w_me = await worker.get_me()
                     logger.info(f"Auxiliary Worker {idx} online: @{w_me.username}")
+                except FloodWait as fw:
+                    logger.warning(f"Worker {idx} login FloodWait ({fw.value}s) - skipping temporarily.")
                 except Exception as e:
-                    logger.error(f"Failed to start auxiliary worker {idx}: {e}")
+                    logger.warning(f"Worker {idx} skipped: {e}")
 
         logger.info(f"Client Pool ready with {len(self.clients)} active session(s).")
 
