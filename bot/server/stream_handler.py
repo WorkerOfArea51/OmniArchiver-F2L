@@ -130,13 +130,14 @@ class StreamHandler:
         else:
             asyncio.create_task(db.increment_views(target_channel, message_id))
 
-        # Calculate exact 1MB chunk offsets
-        chunk_offset = start // CHUNK_SIZE
-        chunk_limit = ((content_length + CHUNK_SIZE - 1) // CHUNK_SIZE) + 1
+        # If full file requested (download/initial load), stream full pipeline (limit=0)
+        is_full_file = (start == 0 and end == file_size - 1)
+        chunk_offset = 0 if is_full_file else (start // CHUNK_SIZE)
+        chunk_limit = 0 if is_full_file else (((content_length + CHUNK_SIZE - 1) // CHUNK_SIZE) + 1)
 
         async def stream_generator():
             bytes_sent = 0
-            bytes_to_skip = start % CHUNK_SIZE
+            bytes_to_skip = 0 if is_full_file else (start % CHUNK_SIZE)
 
             try:
                 async for chunk in worker.stream_media(
