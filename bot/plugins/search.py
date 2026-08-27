@@ -14,19 +14,22 @@ from bot.core.file_properties import humanbytes
 
 logger = logging.getLogger(__name__)
 
-@Client.on_message(filters.command("search") & filters.private & filters.incoming & ~filters.me)
+@Client.on_message(filters.command("search") & filters.private & filters.incoming & ~filters.me, group=1)
 async def search_command(client: Client, message: Message):
+    message.stop_propagation()
     query = message.text.split(maxsplit=1)
     if len(query) < 2:
         await message.reply_text("🔍 **Usage:** `/search <name>`\nExamples:\n• `/search Bleach`\n• `/search 86`\n• `/search Ballerina`")
         return
     await execute_search(client, message, query[1].strip())
 
-@Client.on_message(filters.text & filters.private & filters.incoming & ~filters.me & ~filters.bot & ~filters.command(["start", "help", "about", "ping", "stats", "status", "index", "ban", "unban", "del", "restart", "search"]))
+@Client.on_message(filters.text & filters.private & filters.incoming & ~filters.me & ~filters.bot, group=3)
 async def direct_text_search(client: Client, message: Message):
     query = message.text.strip()
-    if len(query) >= 2:
-        await execute_search(client, message, query)
+    # Ignore any command or single character text
+    if query.startswith("/") or len(query) < 2:
+        return
+    await execute_search(client, message, query)
 
 async def execute_search(client: Client, message: Message, query: str):
     search_msg = await message.reply_text(f"🔍 *Searching for:* `{query}`...")
