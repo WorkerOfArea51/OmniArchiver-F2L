@@ -222,5 +222,5 @@ python3 main.py
 Distributed under the **MIT License**. See [`LICENSE`](LICENSE) for more information.
 
 <div align="center">
-  <sub>Built with ❤️ by <a href="https://github.com/WorkerOfArea51">MidNight Hawk (WorkerOfArea51)</a> for high-speed Telegram streaming.</sub>
+  <sub>Built with ❤️ by <a href="https://github.com/WorkerOfArea51">WorkerOfArea51</a> for high-speed Telegram streaming.</sub>
 </div>
