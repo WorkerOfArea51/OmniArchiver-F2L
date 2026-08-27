@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import asyncio
 import logging
 from typing import Tuple, Optional
@@ -10,8 +11,11 @@ from bot.core.file_properties import get_file_details, get_media_from_message
 
 logger = logging.getLogger(__name__)
 
+# Pyrogram stream_media default chunk size is 1 MiB
+PYRO_CHUNK_SIZE = 1024 * 1024
+
 class StreamHandler:
-    """Production RFC 7233 HTTP Range Stream Engine with Multi-Channel MTProto Support."""
+    """Production RFC 7233 HTTP Range Stream Engine with Accurate Chunk Alignment."""
 
     @staticmethod
     def parse_range(range_header: str, file_size: int) -> Tuple[int, int, int]:
@@ -90,7 +94,7 @@ class StreamHandler:
             )
 
         disposition = "attachment" if as_download else "inline"
-        safe_filename = file_name.replace('"', '\\"')
+        safe_filename = file_name.replace('"', '\"')
 
         headers = {
             "Content-Type": mime_type,
@@ -115,6 +119,7 @@ class StreamHandler:
         else:
             asyncio.create_task(db.increment_views(target_channel, message_id))
 
+        # Check in-memory fast header cache
         cached_chunk = await chunk_cache.get(message_id, start, length)
         if cached_chunk:
             try:
@@ -124,18 +129,43 @@ class StreamHandler:
             except Exception:
                 return response
 
+        # Round-robin worker client for high bandwidth
         worker_client = client_pool.get_client()
 
+        # Calculate exact 1 MiB chunk offsets for Pyrogram stream_media
+        start_chunk = start // PYRO_CHUNK_SIZE
+        end_chunk = end // PYRO_CHUNK_SIZE
+        chunk_limit = (end_chunk - start_chunk) + 1
+
+        bytes_sent = 0
+        chunk_idx = 0
+        cached_buffer = bytearray()
+
         try:
-            cached_buffer = bytearray()
             async for chunk in worker_client.stream_media(
-                message=msg,
-                offset=start,
-                limit=length
+                message=media,
+                offset=start_chunk,
+                limit=chunk_limit
             ):
-                await response.write(chunk)
-                if length <= 5 * 1024 * 1024:
-                    cached_buffer.extend(chunk)
+                # Slice first chunk if start byte is not aligned to 1MB boundary
+                if chunk_idx == 0 and (start % PYRO_CHUNK_SIZE != 0):
+                    offset_in_first = start % PYRO_CHUNK_SIZE
+                    chunk = chunk[offset_in_first:]
+
+                # Slice last chunk if end byte exceeds requested length
+                remaining = length - bytes_sent
+                if len(chunk) > remaining:
+                    chunk = chunk[:remaining]
+
+                if chunk:
+                    await response.write(chunk)
+                    bytes_sent += len(chunk)
+                    if length <= 5 * 1024 * 1024:
+                        cached_buffer.extend(chunk)
+
+                chunk_idx += 1
+                if bytes_sent >= length:
+                    break
 
             await response.write_eof()
 
@@ -143,7 +173,7 @@ class StreamHandler:
                 await chunk_cache.put(message_id, start, length, bytes(cached_buffer))
 
         except (ConnectionResetError, asyncio.CancelledError):
-            logger.debug(f"Consumer disconnected on channel {target_channel} msg {message_id}")
+            pass
         except Exception as e:
             logger.error(f"Stream error on channel {target_channel} msg {message_id}: {e}")
 
