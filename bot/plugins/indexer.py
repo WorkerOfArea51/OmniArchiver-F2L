@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
 import re
+import time
 import asyncio
 import logging
 from pyrogram import Client, filters
 from pyrogram.types import Message
+from pyrogram.errors import FloodWait, MessageNotModified
 from bot.core.config import Config
 from bot.core.database import db
 from bot.core.file_properties import get_file_details, get_media_from_message
@@ -11,11 +13,7 @@ from bot.core.file_properties import get_file_details, get_media_from_message
 logger = logging.getLogger(__name__)
 
 def parse_header_post(caption: str):
-    """
-    Extracts Series Name and Arc Title from header posts like:
-    🎬 Bleach : 1.Agent of the Shinigami Arc
-    🎬 86 Eighty Six Part 2
-    """
+    """Extracts Series Name and Arc Title from header posts."""
     if not caption:
         return "", ""
 
@@ -23,21 +21,15 @@ def parse_header_post(caption: str):
 
     if ":" in first_line:
         parts = first_line.split(":", 1)
-        series_name = parts[0].strip()
-        arc_name = parts[1].strip()
-        return series_name, arc_name
+        return parts[0].strip(), parts[1].strip()
     elif " - " in first_line:
         parts = first_line.split(" - ", 1)
-        series_name = parts[0].strip()
-        arc_name = parts[1].strip()
-        return series_name, arc_name
+        return parts[0].strip(), parts[1].strip()
 
     return first_line, ""
 
 def extract_episode_num(text: str, filename: str):
-    """
-    Extracts continuous 1-to-4 digit episode numbers (e.g. EP - 01 to EP - 1100).
-    """
+    """Extracts continuous 1-to-4 digit episode numbers (e.g. EP - 01 to EP - 1100)."""
     combined = f"{text} {filename}"
     ep_match = re.search(r'(?:ep|episode|e)[\s_\.-]*(\d{1,4})', combined, re.IGNORECASE)
     if ep_match:
@@ -47,9 +39,7 @@ def extract_episode_num(text: str, filename: str):
 
 @Client.on_message(filters.command("index") & filters.private)
 async def index_channels_cmd(client: Client, message: Message):
-    """
-    Indexes channel history using bot-compatible get_messages batch scanning.
-    """
+    """High-speed resilient channel history indexer with time-throttled UI updates."""
     user_id = message.from_user.id if message.from_user else 0
     if Config.OWNER_ID and user_id != Config.OWNER_ID and user_id not in Config.AUTH_USERS:
         await message.reply_text("⛔ **Admin Only:** You do not have permission to run indexer.")
@@ -59,33 +49,37 @@ async def index_channels_cmd(client: Client, message: Message):
         await message.reply_text("❌ No channels configured in `CHANNELS` env variable.")
         return
 
-    status_msg = await message.reply_text("⏳ **Starting Channel Arc & Episode Indexing...**\nScanning past media...")
+    status_msg = await message.reply_text("⏳ **Starting Channel Arc & Episode Indexing...**")
     total_indexed = 0
+    last_ui_update = time.time()
     BATCH_SIZE = 100
 
-    for channel_id in Config.CHANNELS:
+    for ch_idx, channel_id in enumerate(Config.CHANNELS, start=1):
         try:
-            await status_msg.edit_text(f"🔍 **Scanning Channel:** `{channel_id}`...\nIndexed: `{total_indexed}` files")
-            
-            # Find the approximate latest message ID by sending a dummy message and deleting it
+            # Probe channel max message ID
+            max_id = 5000
             try:
                 dummy = await client.send_message(channel_id, "🔍 *Indexing channel...*")
                 max_id = dummy.id
                 await dummy.delete()
-            except Exception:
-                # If send_message permission isn't granted, probe up to 10,000
-                max_id = 5000
+            except Exception as e:
+                logger.info(f"Using default max_id probe for {channel_id}: {e}")
 
             current_series = ""
             current_arc = ""
-            
-            # Scan in chunks of 100 from ID 1 up to max_id
+            channel_indexed = 0
+
+            # Scan in chunks of 100
             for start_id in range(1, max_id + 1, BATCH_SIZE):
                 ids_to_fetch = list(range(start_id, min(start_id + BATCH_SIZE, max_id + 1)))
                 try:
                     messages = await client.get_messages(channel_id, message_ids=ids_to_fetch)
+                except FloodWait as fw:
+                    logger.warning(f"FloodWait on get_messages: sleeping {fw.value}s")
+                    await asyncio.sleep(fw.value)
+                    messages = await client.get_messages(channel_id, message_ids=ids_to_fetch)
                 except Exception as e:
-                    logger.warning(f"Error fetching batch {start_id}-{start_id+BATCH_SIZE} for {channel_id}: {e}")
+                    logger.warning(f"Error fetching batch {start_id} for {channel_id}: {e}")
                     continue
 
                 if not isinstance(messages, list):
@@ -121,19 +115,32 @@ async def index_channels_cmd(client: Client, message: Message):
                             episode_num=ep_num
                         )
                         total_indexed += 1
+                        channel_indexed += 1
 
-                if start_id % 500 == 1:
-                    await status_msg.edit_text(f"🔍 **Scanning Channel:** `{channel_id}`\nProcessed IDs: `{start_id}/{max_id}`\nIndexed Media: `{total_indexed}`")
+                # Time-throttled UI update (every 2.5s) to avoid Telegram edit FloodWait
+                now = time.time()
+                if now - last_ui_update > 2.5:
+                    try:
+                        await status_msg.edit_text(
+                            f"🔍 **Scanning Channel ({ch_idx}/{len(Config.CHANNELS)}):** `{channel_id}`\n"
+                            f"📊 **Progress:** `{min(start_id + BATCH_SIZE, max_id)} / {max_id}` IDs\n"
+                            f"📁 **Total Indexed Media:** `{total_indexed}`"
+                        )
+                        last_ui_update = now
+                    except (MessageNotModified, FloodWait):
+                        pass
 
-                await asyncio.sleep(0.05)
+                await asyncio.sleep(0.02)
 
         except Exception as e:
             logger.error(f"Error indexing channel {channel_id}: {e}", exc_info=True)
-            await message.reply_text(f"⚠️ Error on channel `{channel_id}`: `{str(e)}`")
+            await message.reply_text(f"⚠️ Channel `{channel_id}`: `{str(e)}`")
 
+    # Final summary
     await status_msg.edit_text(
         f"✅ **Indexing Complete!**\n\n"
         f"📁 **Total Episodes & Movies Indexed:** `{total_indexed}`\n"
+        f"🗄️ **Database:** Saved to MongoDB Atlas\n"
         f"🌐 All Arcs and continuous episode numbers are now searchable with `/search <query>`!"
     )
 
