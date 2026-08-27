@@ -1,3 +1,4 @@
+import json
 ﻿import os
 import sys
 import psutil
@@ -101,11 +102,20 @@ async def delete_handler(client: Client, message: Message):
 
 @Client.on_message(filters.command("restart") & filters.private)
 async def restart_handler(client: Client, message: Message):
-    """Graceful restart for container and process managers."""
+    """Graceful restart with automatic completion notification."""
     user_id = message.from_user.id if message.from_user else 0
     if Config.OWNER_ID and user_id != Config.OWNER_ID:
         await message.reply_text("⛔ Only the bot owner can trigger a restart.")
         return
 
-    await message.reply_text("🔄 **Restarting OmniArchiver F2L Service...**")
+    msg = await message.reply_text("🔄 **Restarting OmniArchiver F2L Service...**\nPlease wait a few seconds.")
+    
+    # Save state to send confirmation on boot
+    state_file = os.path.join(Config.WORKDIR, ".restart_notice.json")
+    try:
+        with open(state_file, "w", encoding="utf-8") as f:
+            json.dump({"chat_id": message.chat.id, "message_id": msg.id, "time": time.time()}, f)
+    except Exception:
+        pass
+
     os.execl(sys.executable, sys.executable, *sys.argv)
