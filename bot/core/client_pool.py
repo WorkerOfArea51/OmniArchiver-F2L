@@ -27,7 +27,7 @@ class ClientPoolManager:
             plugins=dict(root="bot/plugins"),
             sleep_threshold=Config.SLEEP_THRESHOLD,
             workers=Config.WORKERS,
-            workdir=Config.WORKDIR
+            in_memory=True
         )
         await self.primary_client.start()
         self.clients.append(self.primary_client)
@@ -46,7 +46,7 @@ class ClientPoolManager:
                         bot_token=token,
                         sleep_threshold=Config.SLEEP_THRESHOLD,
                         workers=2,
-                        workdir=Config.WORKDIR
+                        in_memory=True
                     )
                     await worker.start()
                     self.clients.append(worker)
