@@ -26,8 +26,8 @@ class Config:
 
     # --- Server Settings ---
     # Alwaysdata provides $IP (IPv6/IPv4) and $PORT (e.g. 8100)
-    BIND_ADDRESS = os.environ.get("IP") or os.environ.get("BIND_ADDRESS") or "0.0.0.0"
-    PORT = int(os.environ.get("PORT", 8000))
+    BIND_ADDRESS = os.environ.get("IP") or os.environ.get("BIND_ADDRESS") or "::"
+    PORT = int(os.environ.get("PORT", 8100))
     HAS_SSL = os.environ.get("HAS_SSL", "True").lower() in ("true", "1", "yes")
 
     raw_base_url = os.environ.get("BASE_URL", "").strip().rstrip("/")

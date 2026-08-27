@@ -57,16 +57,22 @@ async def start_services():
     app = setup_web_server()
     runner = web.AppRunner(app)
     await runner.setup()
-    # 4. Start Dual-Stack (IPv4 & IPv6) Web Server for 100% Reverse Proxy Compatibility
+    # 4. Start Native Alwaysdata / VPS Web Server Listener
+    always_ip = os.environ.get("IP")
+    target_hosts = [always_ip] if always_ip else [Config.BIND_ADDRESS, "0.0.0.0", "::", "127.0.0.1"]
+    
     bound_any = False
-    for host in ["0.0.0.0", "::", "127.0.0.1"]:
+    for host in target_hosts:
+        if not host:
+            continue
         try:
             site = web.TCPSite(runner, host=host, port=Config.PORT)
             await site.start()
             logger.info(f"🌐 Web Server bound to: http://{host}:{Config.PORT}")
             bound_any = True
+            break
         except Exception as e:
-            logger.debug(f"Host bind {host}:{Config.PORT} skipped ({e})")
+            logger.warning(f"Failed to bind {host}:{Config.PORT}: {e}")
 
     if not bound_any:
         site = web.TCPSite(runner, port=Config.PORT)
