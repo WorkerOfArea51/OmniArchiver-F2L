@@ -1,4 +1,4 @@
-import os
+﻿import os
 import sys
 import psutil
 import time
@@ -19,10 +19,10 @@ async def stats_handler(client: Client, message: Message):
     """Displays real-time system, memory, and database metrics."""
     user_id = message.from_user.id if message.from_user else 0
     if not is_admin(user_id):
-        await message.reply_text("? **Admin Only:** You do not have permission to view stats.")
+        await message.reply_text("⛔ **Admin Only:** You do not have permission to view stats.")
         return
 
-    msg = await message.reply_text("?? *Gathering performance metrics...*")
+    msg = await message.reply_text("📊 *Gathering performance metrics...*")
 
     process = psutil.Process(os.getpid())
     ram_usage = process.memory_info().rss
@@ -34,15 +34,15 @@ async def stats_handler(client: Client, message: Message):
     uptime = time_formatter(time.time() - ADMIN_START_TIME)
 
     text = (
-        f"?? **OmniArchiver F2L � Performance Dashboard**\n\n"
-        f"?? **Process Uptime:** `{uptime}`\n"
-        f"?? **Bot RAM Footprint:** `{humanbytes(ram_usage)}` ({ram_percent:.1f}%)\n"
-        f"?? **System RAM:** `{humanbytes(sys_ram.used)} / {humanbytes(sys_ram.total)}`\n"
-        f"? **CPU Usage:** `{cpu_percent}%`\n"
-        f"?? **Indexed Files:** `{total_files}`\n"
-        f"?? **Worker Pool:** `{len(client_pool.clients)} Client Session(s)`\n"
-        f"??? **Database Mode:** `{'MongoDB' if db.is_mongo else 'Embedded SQLite'}`\n"
-        f"?? **Endpoint Host:** `{Config.BASE_URL}`"
+        f"📊 **OmniArchiver F2L — Performance Dashboard**\n\n"
+        f"⏱️ **Process Uptime:** `{uptime}`\n"
+        f"🧠 **Bot RAM Footprint:** `{humanbytes(ram_usage)}` ({ram_percent:.1f}%)\n"
+        f"💻 **System RAM:** `{humanbytes(sys_ram.used)} / {humanbytes(sys_ram.total)}`\n"
+        f"⚡ **CPU Usage:** `{cpu_percent}%`\n"
+        f"📁 **Indexed Files:** `{total_files}`\n"
+        f"🚀 **Worker Pool:** `{len(client_pool.clients)} Client Session(s)`\n"
+        f"🗄️ **Database Mode:** `{'MongoDB' if db.is_mongo else 'Embedded SQLite'}`\n"
+        f"🌐 **Endpoint Host:** `{Config.BASE_URL}`"
     )
 
     await msg.edit_text(text)
@@ -52,70 +52,60 @@ async def status_handler(client: Client, message: Message):
     """Quick operational health check."""
     uptime = time_formatter(time.time() - ADMIN_START_TIME)
     await message.reply_text(
-        f"?? **OmniArchiver F2L is Operational!**\n"
-        f"� Workers: `{len(client_pool.clients)}`\n"
-        f"� Uptime: `{uptime}`\n"
-        f"� Host: `{Config.BASE_URL}`"
+        f"🟢 **OmniArchiver F2L is Operational!**\n"
+        f"• Workers: `{len(client_pool.clients)}`\n"
+        f"• Uptime: `{uptime}`\n"
+        f"• Host: `{Config.BASE_URL}`"
     )
-
-@Client.on_message(filters.command("ban") & filters.private)
-async def ban_handler(client: Client, message: Message):
-    """Bans a user from generating stream links."""
-    user_id = message.from_user.id if message.from_user else 0
-    if not is_admin(user_id):
-        return
-
-    parts = message.text.split()
-    if len(parts) < 2 or not parts[1].isdigit():
-        await message.reply_text("Usage: `/ban <user_id>`")
-        return
-
-    target_id = int(parts[1])
-    await db.ban_user(target_id, ban=True)
-    await message.reply_text(f"? User `{target_id}` has been banned.")
-
-@Client.on_message(filters.command("unban") & filters.private)
-async def unban_handler(client: Client, message: Message):
-    """Unbans a user."""
-    user_id = message.from_user.id if message.from_user else 0
-    if not is_admin(user_id):
-        return
-
-    parts = message.text.split()
-    if len(parts) < 2 or not parts[1].isdigit():
-        await message.reply_text("Usage: `/unban <user_id>`")
-        return
-
-    target_id = int(parts[1])
-    await db.ban_user(target_id, ban=False)
-    await message.reply_text(f"? User `{target_id}` has been unbanned.")
 
 @Client.on_message(filters.command("del") & filters.private)
 async def delete_handler(client: Client, message: Message):
-    """Deletes a file from storage channel by message_id."""
+    """Deletes a file from both the Telegram Channel and the Database index."""
     user_id = message.from_user.id if message.from_user else 0
     if not is_admin(user_id):
         return
 
     parts = message.text.split()
     if len(parts) < 2 or not parts[1].isdigit():
-        await message.reply_text("Usage: `/del <message_id>`")
+        await message.reply_text("Usage: `/del <message_id>`\nExample: `/del 145`")
         return
 
     target_msg_id = int(parts[1])
-    try:
-        await client_pool.primary_client.delete_messages(Config.BIN_CHANNEL_ID, target_msg_id)
-        await message.reply_text(f"??? Message `{target_msg_id}` deleted from storage archive.")
-    except Exception as e:
-        await message.reply_text(f"? Failed to delete: `{e}`")
+    record = await db.get_file(target_msg_id)
+
+    target_channel = record["channel_id"] if record else (Config.CHANNELS[0] if Config.CHANNELS else 0)
+
+    # 1. Delete from Telegram channel
+    deleted_from_tg = False
+    if target_channel:
+        try:
+            await client_pool.primary_client.delete_messages(target_channel, target_msg_id)
+            deleted_from_tg = True
+        except Exception as e:
+            pass
+
+    # 2. Delete from Database index
+    if not db.is_mongo:
+        import aiosqlite
+        async with aiosqlite.connect(db.sqlite_path) as sdb:
+            await sdb.execute("DELETE FROM files WHERE message_id = ?", (target_msg_id,))
+            await sdb.commit()
+    else:
+        await db._mongo_db.files.delete_one({"message_id": target_msg_id})
+
+    await message.reply_text(
+        f"🗑️ **Message `{target_msg_id}` deleted successfully!**\n"
+        f"• Telegram Channel: `{'Deleted' if deleted_from_tg else 'Not Found/Failed'}`\n"
+        f"• Database Search Index: `Removed`"
+    )
 
 @Client.on_message(filters.command("restart") & filters.private)
 async def restart_handler(client: Client, message: Message):
     """Graceful restart for container and process managers."""
     user_id = message.from_user.id if message.from_user else 0
     if Config.OWNER_ID and user_id != Config.OWNER_ID:
-        await message.reply_text("? Only the bot owner can trigger a restart.")
+        await message.reply_text("⛔ Only the bot owner can trigger a restart.")
         return
 
-    await message.reply_text("?? **Restarting OmniArchiver F2L Service...**")
+    await message.reply_text("🔄 **Restarting OmniArchiver F2L Service...**")
     os.execl(sys.executable, sys.executable, *sys.argv)
