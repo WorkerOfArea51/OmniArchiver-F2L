@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import logging
 from pyrogram import Client, filters
 from pyrogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton
@@ -54,14 +55,14 @@ async def private_file_uploader(client: Client, message: Message):
             f"🎬 **{file_name}**\n"
             f"📦 **Size:** `{humanbytes(file_size)}`\n"
             f"🏷️ **MIME:** `{mime_type}`\n\n"
-            f"🔗 **Direct Link (For StreamHub App & Download):**\n`{direct_link}`\n\n"
+            f"🔗 **Direct Link (Tap to copy for StreamHub):**\n`{direct_link}`\n\n"
             f"🌐 **Watch Online in Browser:**\n`{player_url}`"
         )
 
         keyboard = InlineKeyboardMarkup([
             [
-                InlineKeyboardButton("📋 Copy Direct Link", copy_text=direct_link),
-                InlineKeyboardButton("▶️ Watch Online", url=player_url)
+                InlineKeyboardButton("▶️ Watch Online", url=player_url),
+                InlineKeyboardButton("⬇️ Fast Download", url=direct_link)
             ]
         ])
 

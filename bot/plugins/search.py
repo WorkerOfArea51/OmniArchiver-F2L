@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import logging
 import urllib.parse
 from pyrogram import Client, filters
@@ -5,10 +6,7 @@ from pyrogram.types import (
     Message,
     InlineKeyboardMarkup,
     InlineKeyboardButton,
-    CallbackQuery,
-    InlineQuery,
-    InlineQueryResultArticle,
-    InputTextMessageContent
+    CallbackQuery
 )
 from bot.core.config import Config
 from bot.core.database import db
@@ -33,61 +31,56 @@ async def direct_text_search(client: Client, message: Message):
 async def execute_search(client: Client, message: Message, query: str):
     search_msg = await message.reply_text(f"🔍 *Searching for:* `{query}`...")
 
-    # 1. Check for multi-arc series (e.g. Bleach, Naruto, One Piece)
-    arcs = await db.get_series_arcs(query)
+    try:
+        # 1. Check for multi-arc series (e.g. Bleach, Naruto, One Piece)
+        arcs = await db.get_series_arcs(query)
 
-    if len(arcs) > 1:
-        arc_buttons = []
-        for arc in arcs:
-            arc_buttons.append([
-                InlineKeyboardButton(f"📁 {arc}", callback_data=f"arc:{arc[:40]}")
+        if len(arcs) > 1:
+            arc_buttons = []
+            for arc in arcs:
+                arc_buttons.append([
+                    InlineKeyboardButton(f"📁 {arc}", callback_data=f"arc:{arc[:40]}")
+                ])
+
+            all_files = await db.search_files(query, limit=500)
+            playlist_url = f"{Config.BASE_URL}/playlist/{urllib.parse.quote(query.replace(' ', '_'))}.m3u"
+
+            keyboard = InlineKeyboardMarkup([
+                [InlineKeyboardButton("📺 Open M3U Playlist", url=playlist_url)],
+                *arc_buttons
             ])
 
-        all_files = await db.search_files(query, limit=500)
-        full_batch_payload = []
-        for item in all_files:
-            ch = item["channel_id"]
-            mid = item["message_id"]
-            ep = item.get("episode_num") or f"ID {mid}"
-            dl_url = f"{Config.BASE_URL}/dl/{ch}/{mid}"
-            full_batch_payload.append(f"{ep}: {dl_url}")
+            text = (
+                f"🎬 **{query.title()} — Multi-Arc Series**\n"
+                f"📚 **Detected Arcs:** `{len(arcs)}`\n"
+                f"📦 **Total Episodes:** `{len(all_files)}`\n\n"
+                f"📺 **M3U Playlist URL (Tap to copy):**\n`{playlist_url}`\n\n"
+                f"👉 *Select an Arc below to view episodes:* "
+            )
 
-        playlist_url = f"{Config.BASE_URL}/playlist/{urllib.parse.quote(query.replace(' ', '_'))}.m3u"
+            await search_msg.edit_text(text, reply_markup=keyboard, disable_web_page_preview=True)
+            return
 
-        keyboard = InlineKeyboardMarkup([
-            [InlineKeyboardButton("📺 Copy Single M3U Link", copy_text=playlist_url)],
-            *arc_buttons,
-            [InlineKeyboardButton(f"📋 Copy All ({len(all_files)} Episodes)", copy_text="\n".join(full_batch_payload))]
-        ])
+        # 2. Search for files / specific arc
+        results = await db.search_files(query, limit=60)
+        if not results:
+            await search_msg.edit_text(f"❌ No media found matching `{query}`.\nMake sure your channels are indexed with `/index`.")
+            return
 
-        text = (
-            f"🎬 **{query.title()} — Multi-Arc Series**\n"
-            f"📚 **Detected Arcs:** `{len(arcs)}`\n"
-            f"📦 **Total Episodes:** `{len(all_files)}`\n\n"
-            f"🔗 **Single M3U Playlist:**\n`{playlist_url}`\n\n"
-            f"👉 *Select an Arc below to get direct links:* "
-        )
+        is_series = len(results) > 1 and any(r.get("episode_num") for r in results)
 
-        await search_msg.edit_text(text, reply_markup=keyboard)
-        return
+        if is_series:
+            await render_batch_view(search_msg, results, query)
+        else:
+            await render_single_view(search_msg, results[0])
 
-    # 2. Search for files / specific arc
-    results = await db.search_files(query, limit=60)
-    if not results:
-        await search_msg.edit_text(f"❌ No media found matching `{query}`.\nMake sure your channels are indexed with `/index`.")
-        return
-
-    is_series = len(results) > 1 and any(r.get("episode_num") for r in results)
-
-    if is_series:
-        await render_batch_view(search_msg, results, query)
-    else:
-        await render_single_view(search_msg, results[0])
+    except Exception as e:
+        logger.error(f"Search execution error for query '{query}': {e}", exc_info=True)
+        await search_msg.edit_text(f"⚠️ **Search Error:** `{str(e)}`")
 
 async def render_batch_view(target_msg, results, title: str):
-    """Renders clean batch view with 1 Direct Link per episode, M3U link, and Copy All button."""
+    """Renders clean batch view with 1-tap copyable links and M3U playlist."""
     batch_text_lines = []
-    batch_copy_payload = []
     keyboard_buttons = []
 
     series_header = results[0].get("arc_name") or results[0].get("series_name") or title
@@ -106,32 +99,26 @@ async def render_batch_view(target_msg, results, title: str):
         watch_url = f"{Config.BASE_URL}/watch/{ch}/{mid}"
 
         batch_text_lines.append(f"• **{ep}** ({size})\n  `{direct_url}`")
-        batch_copy_payload.append(f"{ep}: {direct_url}")
 
-        if len(keyboard_buttons) < 8:
+        if len(keyboard_buttons) < 10:
             keyboard_buttons.append([
                 InlineKeyboardButton(f"▶️ {ep}", url=watch_url),
-                InlineKeyboardButton("⬇️ Direct Link", copy_text=direct_url)
+                InlineKeyboardButton("⬇️ Download", url=direct_url)
             ])
 
-    all_batch_links = "\n".join(batch_copy_payload)
-
     keyboard = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("📺 Copy Single M3U Link", copy_text=playlist_url),
-            InlineKeyboardButton("📋 Copy All Direct Links", copy_text=all_batch_links)
-        ],
+        [InlineKeyboardButton("📺 Open M3U Playlist", url=playlist_url)],
         *keyboard_buttons
     ])
 
     final_msg = "\n".join(batch_text_lines[:15])
     if len(batch_text_lines) > 15:
-        final_msg += f"\n\n*(+ {len(batch_text_lines) - 15} more episodes - use Copy buttons above)*"
+        final_msg += f"\n\n*(+ {len(batch_text_lines) - 15} more episodes - tap links above to copy)*"
 
     await target_msg.edit_text(final_msg, reply_markup=keyboard, disable_web_page_preview=True)
 
 async def render_single_view(target_msg, item):
-    """Renders single movie/video card with 1 Direct Link for both StreamHub app & downloading."""
+    """Renders single movie/video card with Direct Link for StreamHub & Web Player."""
     ch = item["channel_id"]
     mid = item["message_id"]
     file_name = item["file_name"]
@@ -143,14 +130,14 @@ async def render_single_view(target_msg, item):
         f"🎬 **{file_name}**\n"
         f"📦 **Size:** `{size}`\n"
         f"🏷️ **MIME:** `{item['mime_type']}`\n\n"
-        f"🔗 **Direct Link (For StreamHub App & Download):**\n`{direct_link}`\n\n"
+        f"🔗 **Direct Link (Tap to copy for StreamHub):**\n`{direct_link}`\n\n"
         f"🌐 **Watch Online in Browser:**\n`{player_url}`"
     )
 
     keyboard = InlineKeyboardMarkup([
         [
-            InlineKeyboardButton("📋 Copy Direct Link", copy_text=direct_link),
-            InlineKeyboardButton("▶️ Watch Online", url=player_url)
+            InlineKeyboardButton("▶️ Watch Online", url=player_url),
+            InlineKeyboardButton("⬇️ Fast Download", url=direct_link)
         ]
     ])
 
