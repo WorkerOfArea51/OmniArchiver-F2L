@@ -1,216 +1,118 @@
-<div align="center">
+<div align="center"><h1>🌐 OmniArchiver-F2L</h1>
+<b>An open-source Python Telegram bot to transmit Telegram files over HTTP (Stream & Direct Download).</b>
+</div><br>
 
-# ⚡ OmniArchiver F2L
-### 🚀 High-Performance Telegram File-to-Link & Video Streaming Gateway
+## **📑 INDEX**
 
-<p align="center">
-  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Python-3.11%2B-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python 3.11+"></a>
-  <a href="https://github.com/Mayuri-Chan/pyrofork"><img src="https://img.shields.io/badge/Pyrofork-MTProto%20v2.2-8A2BE2?style=for-the-badge&logo=telegram&logoColor=white" alt="Pyrofork"></a>
-  <a href="https://docs.aiohttp.org/"><img src="https://img.shields.io/badge/aiohttp-Async%20Server-2C5BB4?style=for-the-badge&logo=aiohttp&logoColor=white" alt="aiohttp"></a>
-  <a href="https://www.docker.com/"><img src="https://img.shields.io/badge/Docker-Ready-2496ED?style=for-the-badge&logo=docker&logoColor=white" alt="Docker"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="License: MIT"></a>
-</p>
+* [**⚙️ Installation**](#installation)
+  * [Python & Git](#i-1)
+  * [Download](#i-2)
+  * [Requirements](#i-3)
+* [**📝 Variables**](#variables)
+* [**🕹 Deployment**](#deployment)
+  * [Locally](#d-1)
+  * [Docker](#d-2)
+  * [Alwaysdata](#d-3)
+* [**❤️ Credits**](#credits)
 
-<p align="center">
-  <b>A production-grade Telegram MTProto streaming proxy & auto-indexing gateway.</b><br>
-  Built specifically for <b>Anime, Movie & Web Series channels</b>, powering <b>StreamHub</b>, ExoPlayer, VLC, and mpv.
-</p>
+<a name="installation"></a>
 
----
+## ⚙️ Installation
 
-[Key Features](#-key-features) | [Architecture](#-system-architecture) | [Linux VPS Setup](#-linux-vps-deployment-ubuntu--debian) | [Docker Setup](#-docker--docker-compose-deployment) | [API Reference](#-rest-api--streaming-endpoints) | [License](#-license)
+<a name="i-1"></a>
 
----
+**1. Install Python & Git:**
 
-</div>
-
-## 🌟 Highlights & Key Features
-
-<table>
-  <tr>
-    <td width="50%">
-      <h3>📂 Multi-Channel Auto-Indexing</h3>
-      Connects to your <b>Anime, Movie & Web Series channels</b> simultaneously. Runs <code>/index</code> to scan your channel history and auto-indexes new uploads in real-time.
-    </td>
-    <td width="50%">
-      <h3>🔍 Instant Search & Batch Links</h3>
-      Search any movie or anime (<code>/search 86</code> or type in PM). Groups anime/series into a clean <b>Batch Episode List</b> with a 1-click <b>📋 Copy All Direct Links</b> button!
-    </td>
-  </tr>
-  <tr>
-    <td width="50%">
-      <h3>🚀 Multi-Client Worker Pooling</h3>
-      Distributes MTProto chunk download streams across multiple auxiliary bot tokens (<code>MULTI_TOKENS</code>) to smash Telegram single-session bandwidth limits and achieve <b>20–30+ MB/s playback</b>.
-    </td>
-    <td width="50%">
-      <h3>⏩ RFC 7233 Range Seeking</h3>
-      Native <b>HTTP 206 Partial Content</b> handling allows instant scrub/seeking across timestamps without connection drops or buffer lag in ExoPlayer, VLC, and iOS/Android players.
-    </td>
-  </tr>
-  <tr>
-    <td width="50%">
-      <h3>🧠 In-Memory LRU Ring Buffer</h3>
-      Caches media container header chunks (first 5MB & last 2MB) directly in memory, reducing video probing and startup delays to <b>0 ms</b>.
-    </td>
-    <td width="50%">
-      <h3>💾 Ultra-Low RAM Footprint</h3>
-      Direct generator chunk piping operates at <b>~60 MB – 90 MB RAM</b>, running flawlessly inside low-spec micro VPS instances.
-    </td>
-  </tr>
-</table>
-
----
-
-## 🏛️ System Architecture
-
-```mermaid
-graph LR
-    User[📱 StreamHub App / ExoPlayer / VLC] -->|HTTP 206 Direct Stream| WebServer[🌐 aiohttp Async Server]
-    WebServer --> LRU[🧠 In-Memory LRU Cache]
-    LRU -.->|Cache Miss| Pool[⚡ Multi-Client Pyrofork Pool]
-    Pool -->|Parallel MTProto Chunks| TG[(☁️ Telegram DC Servers)]
-    TG -->|Binary Stream| WebServer
-    WebServer -->|Byte Chunks| User
+For Windows:
+```
+winget install Python.Python.3.11
+winget install Git.Git
+```
+For Linux:
+```
+sudo apt-get update && sudo apt-get install -y python3.11 git python3-pip
+```
+For MacOS:
+```
+brew install python@3.11 git
+```
+For Termux:
+```
+pkg install python -y
+pkg install git -y
 ```
 
----
+<a name="i-2"></a>
 
-## 📂 Project Tree
-
+**2. Download repository:**
 ```
-OmniArchiver-F2L/
-├── bot/
-│   ├── core/
-│   │   ├── config.py           # Validated environment loader & URL generator
-│   │   ├── client_pool.py      # Multi-session MTProto connection balancer
-│   │   ├── database.py         # Async SQLite (omni_archiver.db) & MongoDB repository
-│   │   ├── cache.py            # In-memory LRU ring buffer for 0ms header probing
-│   │   └── file_properties.py  # Media metadata & MIME resolver
-│   ├── server/
-│   │   ├── routes.py           # HTTP endpoints (/dl, /stream, /playlist, /watch, /api/v1/search)
-│   │   ├── stream_handler.py   # RFC 7233 Range request & MTProto chunk streamer
-│   │   ├── web_server.py       # aiohttp app factory with universal CORS
-│   │   └── templates/          # Modern Plyr.js dark web player & status dashboard
-│   ├── plugins/
-│   │   ├── start.py            # /start, /help, /about, /ping handlers
-│   │   ├── indexer.py          # /index channel history scanner & real-time listener
-│   │   ├── search.py           # /search & batch link copy generator
-│   │   ├── upload.py           # Direct PM upload & forwarding handler
-│   │   └── admin.py            # /stats, /status, /ban, /unban, /del, /restart
-│   ├── __init__.py
-│   └── __main__.py             # Unified async orchestrator
-├── main.py                     # Root entry point wrapper
-├── requirements.txt            # Pyrofork, TgCrypto, aiohttp, aiosqlite, Motor
-├── .env.example                # Environment configuration template
-├── Dockerfile                  # Production container definition
-├── docker-compose.yml          # One-click Docker deployment
-├── Procfile                    # PaaS deployment runner
-├── LICENSE                     # MIT License
-└── README.md                   # Documentation
-```
-
----
-
-## 🚀 Quickstart & Deployment Guides
-
-### 1️⃣ Linux VPS Deployment (Ubuntu / Debian / CentOS)
-
-```bash
-# 1. Update and install Python 3.11 & build tools
-sudo apt update && sudo apt install -y python3 python3-pip python3-venv git build-essential
-
-# 2. Clone the repository
 git clone https://github.com/WorkerOfArea51/OmniArchiver-F2L.git
-cd OmniArchiver-F2L
+```
 
-# 3. Create virtual environment & install requirements
-python3 -m venv venv
-source venv/bin/activate
-pip install --upgrade pip
+**3. Change Directory:**
+
+```
+cd OmniArchiver-F2L
+```
+
+<a name="i-3"></a>
+
+**4. Install requirements:**
+
+```
 pip install -r requirements.txt
-
-# 4. Configure environment
-cp .env.example .env
-nano .env  # Add your API_ID, API_HASH, BOT_TOKEN, and CHANNELS
-
-# 5. Run with Python or PM2
-python3 main.py
 ```
 
-#### Running 24/7 with PM2:
-```bash
-sudo npm install -g pm2
-pm2 start main.py --name "omniarchiver" --interpreter ./venv/bin/python3
-pm2 save && pm2 startup
+<a name="variables"></a>
+
+## 📝 Variables
+**The variables listed below should be defined either in [config.py](https://github.com/WorkerOfArea51/OmniArchiver-F2L/blob/main/bot/config.py) file or as environment variables, depending on your setup.**
+* `API_ID` | `TELEGRAM_API_ID`: API ID of your Telegram account, can be obtained from [My Telegram](https://my.telegram.org). `int`
+* `API_HASH` | `TELEGRAM_API_HASH`: API hash of your Telegram account, can be obtained from [My Telegram](https://my.telegram.org). `str`
+* `OWNER_ID`: ID of your Telegram account, can be obtained by sending **/info** to [@DumpJsonBot](https://t.me/DumpJsonBot) or [@userinfobot](https://t.me/userinfobot). `int`
+* `ALLOWED_USER_IDS`: A list of Telegram account IDs (separated by spaces) that are permitted to use the bot. Leave this field empty to allow anyone to use it. `str`
+* `BOT_USERNAME` | `TELEGRAM_BOT_USERNAME`: Username of your Telegram bot, create one using [@BotFather](https://t.me/BotFather). `str`
+* `BOT_TOKEN` | `TELEGRAM_BOT_TOKEN`: Telegram API token of your bot, can be obtained from [@BotFather](https://t.me/BotFather). `str`
+* `CHANNEL_ID` | `TELEGRAM_CHANNEL_ID`: ID of the channel where bot will forward all files received from users, can be obtained by forwarding any message from channel to [@DumpJsonBot](https://t.me/DumpJsonBot) and looking for `forward_from_chat` key. `int`
+* `SECRET_CODE_LENGTH`: Number of characters that file code should contain, by default `24`. `int`
+* `BASE_URL`: Base URL that bot should use while generating file links, can be FQDN and by default `http://127.0.0.1:8080`. `str`
+* `BIND_ADDRESS`: Bind address for web server, by default `0.0.0.0` to run on all possible addresses. `str`
+* `PORT`: Port for web server to run on, by default `8080`. `int`
+
+<a name="deployment"></a>
+
+## 🕹 Deployment
+
+> [!NOTE]
+> This bot is designed for personal use or to share with friends and family.
+
+<a name="d-1"></a>
+
+**1. Running locally:**
+```
+python -m bot
 ```
 
----
+<a name="d-2"></a>
 
-### 2️⃣ Docker / Docker Compose Deployment
-
-```bash
-# 1. Clone the repository
-git clone https://github.com/WorkerOfArea51/OmniArchiver-F2L.git
-cd OmniArchiver-F2L
-
-# 2. Configure environment
-cp .env.example .env
-nano .env
-
-# 3. Run with Docker Compose
-docker compose up -d --build
+**2. Using Docker:**
+* Build Docker image:
+```
+docker build -t omniarchiver-f2l .
+```
+* Run the Docker container:
+```
+docker run -p 8080:8080 omniarchiver-f2l
 ```
 
----
+<a name="d-3"></a>
 
-## ⚙️ Environment Variables Reference
+**3. Alwaysdata Deployment:**
+* Set up a **User program** site on Alwaysdata pointing to `python -m bot`.
+* Set environment variables in Alwaysdata or through a `start.sh` script.
 
-| Variable | Required | Description | Default |
-| :--- | :---: | :--- | :--- |
-| `API_ID` | **Yes** | Telegram API ID from [my.telegram.org](https://my.telegram.org) | — |
-| `API_HASH` | **Yes** | Telegram API Hash from [my.telegram.org](https://my.telegram.org) | — |
-| `BOT_TOKEN` | **Yes** | Primary Telegram Bot Token from [@BotFather](https://t.me/BotFather) | — |
-| `CHANNELS` | **Yes** | Comma-separated list of your channel IDs (`-100xxx,-100yyy,-100zzz`) | — |
-| `MULTI_TOKENS` | *No* | Comma-separated auxiliary bot tokens for multi-worker parallel speed | `""` |
-| `BASE_URL` | *No* | Public domain or IP (e.g. `your-domain.com` or `123.45.67.89:8080`) | `0.0.0.0:8080` |
-| `PORT` | *No* | Internal web server port | `8080` |
-| `BIND_ADDRESS` | *No* | Internal bind IP address | `0.0.0.0` |
-| `OWNER_ID` | *No* | Numeric Telegram user ID for admin command authorization | `0` |
-| `AUTH_USERS` | *No* | Comma-separated list of allowed user IDs (leave empty for public) | `""` |
-| `DATABASE_URL` | *No* | MongoDB URI (leave empty to use embedded SQLite) | `""` |
-| `CHUNK_SIZE` | *No* | MTProto streaming chunk size in bytes | `524288` (512 KB) |
-| `CACHE_SIZE_MB` | *No* | Max in-memory LRU header cache in Megabytes | `32` |
+<a name="credits"></a>
 
----
+## ❤️ Credits
 
-## 📡 REST API & Streaming Endpoints
-
-| Endpoint | Method | Description |
-| :--- | :---: | :--- |
-| `/dl/{channel_id}/{id}` | `GET` | Direct binary stream with full **HTTP 206 Range seeking** (StreamHub / ExoPlayer / VLC / Downloads) |
-| `/playlist/{series_name}.m3u` | `GET` | Dynamic M3U playlist file for entire anime arcs / seasons |
-| `/watch/{channel_id}/{id}` | `GET` | Embedded **Plyr.js** dark web player for browsers |
-| `/api/v1/search?q={query}` | `GET` | JSON search endpoint returning movies & anime with stream URLs |
-| `/health` | `GET` | Uptime and active worker pool liveness monitor |
-
----
-
-## 📜 Bot Commands
-
-- `/start` — Launch the interactive bot control panel.
-- `/index` — Scans and indexes all past movies & episodes across your channels *(Admin)*.
-- `/search <query>` — Search for a movie or anime batch (or just type title in bot PM).
-- `/stats` — Real-time RAM, CPU, worker sessions, and indexed file statistics *(Admin)*.
-- `/status` — Quick operational health check.
-- `/del <msg_id>` — Delete a media file from the storage archive and search index *(Admin)*.
-- `/ping` — Measure bot latency and server response time.
-
----
-
-## 📄 License
-
-Distributed under the **MIT License**. See [`LICENSE`](LICENSE) for more information.
-
-<div align="center">
-  <sub>Built with ❤️ by <a href="https://github.com/WorkerOfArea51">WorkerOfArea51</a> for high-speed Telegram streaming.</sub>
-</div>
+- [**WorkerOfArea51**](https://github.com/WorkerOfArea51): Maintainer of OmniArchiver-F2L.

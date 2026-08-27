@@ -1,7 +1,7 @@
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
-*.class
+*$py.class
 
 # C extensions
 *.so
@@ -20,6 +20,7 @@ parts/
 sdist/
 var/
 wheels/
+share/python-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
@@ -28,21 +29,13 @@ wheels/
 venv/
 env/
 ENV/
-.env
 .venv
 
-# Telegram session files
+# Telegram Bot sessions & logs
 *.session
 *.session-journal
-
-# Logs
+event-log.txt
 *.log
-logs/
 
-# IDE & OS
-.vscode/
-.idea/
-.DS_Store
-Thumbs.db
-
-reference_FileToLink/
+# Environment variables
+.env
