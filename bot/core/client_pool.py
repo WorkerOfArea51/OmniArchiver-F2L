@@ -43,6 +43,17 @@ class ClientPoolManager:
         me = await self.primary_client.get_me()
         logger.info(f"Primary Bot online: @{me.username} [{me.id}]")
 
+        # Pre-cache storage channels in memory for zero-latency peer resolution
+        if Config.CHANNELS:
+            logger.info("Pre-caching storage channel access hashes...")
+            for ch_id in Config.CHANNELS:
+                try:
+                    chat = await self.primary_client.get_chat(ch_id)
+                    logger.info(f"✅ Storage channel cached: {getattr(chat, 'title', 'Channel')} [{ch_id}]")
+                except Exception as e:
+                    logger.warning(f"Note on channel {ch_id}: {e}")
+
+
         # Initialize auxiliary workers for dedicated MTProto streaming
         if Config.MULTI_TOKENS:
             logger.info(f"Setting up {len(Config.MULTI_TOKENS)} auxiliary stream workers...")
