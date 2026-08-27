@@ -37,7 +37,7 @@ class Database:
 
 class Server:
     BASE_URL = env.get("BASE_URL", "http://127.0.0.1:8080").rstrip("/")
-    BIND_ADDRESS = env.get("BIND_ADDRESS", env.get("IP", "0.0.0.0"))
+    BIND_ADDRESS = env.get("BIND_ADDRESS", env.get("IP", "::"))
     PORT = int(env.get("PORT", 8080))
 
 # LOGGING CONFIGURATION
