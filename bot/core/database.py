@@ -34,7 +34,10 @@ class DatabaseManager:
                 self.is_mongo = False
 
         if not self.is_mongo:
-            async with aiosqlite.connect(self.sqlite_path) as db:
+            async with aiosqlite.connect(self.sqlite_path, timeout=30.0) as db:
+                await db.execute("PRAGMA journal_mode=WAL;")
+                await db.execute("PRAGMA busy_timeout=30000;")
+                await db.execute("PRAGMA synchronous=NORMAL;")
                 await db.execute("""
                     CREATE TABLE IF NOT EXISTS files (
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -97,7 +100,7 @@ class DatabaseManager:
                 upsert=True
             )
         else:
-            async with aiosqlite.connect(self.sqlite_path) as db:
+            async with aiosqlite.connect(self.sqlite_path, timeout=30.0) as db:
                 await db.execute("""
                     INSERT OR REPLACE INTO files (
                         channel_id, message_id, file_name, file_size, mime_type, caption, series_name, arc_name, episode_num, created_at
@@ -111,7 +114,7 @@ class DatabaseManager:
             if channel_id: query["channel_id"] = channel_id
             return await self._mongo_db.files.find_one(query)
         else:
-            async with aiosqlite.connect(self.sqlite_path) as db:
+            async with aiosqlite.connect(self.sqlite_path, timeout=30.0) as db:
                 db.row_factory = aiosqlite.Row
                 if channel_id:
                     cursor = await db.execute("SELECT * FROM files WHERE channel_id = ? AND message_id = ?", (channel_id, message_id))
@@ -139,7 +142,7 @@ class DatabaseManager:
             }).limit(limit)
             return await cursor.to_list(length=limit)
         else:
-            async with aiosqlite.connect(self.sqlite_path) as db:
+            async with aiosqlite.connect(self.sqlite_path, timeout=30.0) as db:
                 db.row_factory = aiosqlite.Row
                 async with db.execute("""
                     SELECT * FROM files 
@@ -155,7 +158,7 @@ class DatabaseManager:
             arcs = await self._mongo_db.files.distinct("arc_name", {"series_name": {"$regex": series_name, "$options": "i"}})
             return [a for a in arcs if a]
         else:
-            async with aiosqlite.connect(self.sqlite_path) as db:
+            async with aiosqlite.connect(self.sqlite_path, timeout=30.0) as db:
                 async with db.execute("""
                     SELECT DISTINCT arc_name FROM files 
                     WHERE (series_name LIKE ? OR arc_name LIKE ?) AND arc_name != ''
@@ -170,7 +173,7 @@ class DatabaseManager:
             cursor = self._mongo_db.files.find({"arc_name": {"$regex": arc_name, "$options": "i"}}).sort("id", 1)
             return await cursor.to_list(length=150)
         else:
-            async with aiosqlite.connect(self.sqlite_path) as db:
+            async with aiosqlite.connect(self.sqlite_path, timeout=30.0) as db:
                 db.row_factory = aiosqlite.Row
                 async with db.execute("""
                     SELECT * FROM files 
@@ -184,7 +187,7 @@ class DatabaseManager:
         if self.is_mongo:
             await self._mongo_db.files.update_one({"channel_id": channel_id, "message_id": message_id}, {"$inc": {"views": 1}})
         else:
-            async with aiosqlite.connect(self.sqlite_path) as db:
+            async with aiosqlite.connect(self.sqlite_path, timeout=30.0) as db:
                 await db.execute("UPDATE files SET views = views + 1 WHERE channel_id = ? AND message_id = ?", (channel_id, message_id))
                 await db.commit()
 
@@ -192,7 +195,7 @@ class DatabaseManager:
         if self.is_mongo:
             await self._mongo_db.files.update_one({"channel_id": channel_id, "message_id": message_id}, {"$inc": {"downloads": 1}})
         else:
-            async with aiosqlite.connect(self.sqlite_path) as db:
+            async with aiosqlite.connect(self.sqlite_path, timeout=30.0) as db:
                 await db.execute("UPDATE files SET downloads = downloads + 1 WHERE channel_id = ? AND message_id = ?", (channel_id, message_id))
                 await db.commit()
 
@@ -201,7 +204,7 @@ class DatabaseManager:
             user = await self._mongo_db.users.find_one({"user_id": user_id})
             return bool(user and user.get("is_banned"))
         else:
-            async with aiosqlite.connect(self.sqlite_path) as db:
+            async with aiosqlite.connect(self.sqlite_path, timeout=30.0) as db:
                 async with db.execute("SELECT is_banned FROM users WHERE user_id = ?", (user_id,)) as cursor:
                     row = await cursor.fetchone()
                     return bool(row and row[0] == 1)
@@ -214,7 +217,7 @@ class DatabaseManager:
                 upsert=True
             )
         else:
-            async with aiosqlite.connect(self.sqlite_path) as db:
+            async with aiosqlite.connect(self.sqlite_path, timeout=30.0) as db:
                 await db.execute(
                     "INSERT OR REPLACE INTO users (user_id, is_banned, created_at) VALUES (?, ?, ?)",
                     (user_id, 1 if ban else 0, time.time())
@@ -225,7 +228,7 @@ class DatabaseManager:
         if self.is_mongo:
             return await self._mongo_db.files.count_documents({})
         else:
-            async with aiosqlite.connect(self.sqlite_path) as db:
+            async with aiosqlite.connect(self.sqlite_path, timeout=30.0) as db:
                 async with db.execute("SELECT COUNT(*) FROM files") as cursor:
                     row = await cursor.fetchone()
                     return row[0] if row else 0
