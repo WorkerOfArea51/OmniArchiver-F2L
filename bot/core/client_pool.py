@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-import os
 import asyncio
 import logging
 from typing import List
@@ -7,11 +6,11 @@ from pyrogram import Client
 from pyrogram.errors import FloodWait
 from bot.core.config import Config
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("ClientPool")
 
 class ClientPoolManager:
     """
-    Resilient Multi-Client Pool with auto-failover and persistent disk session auth.
+    High-Performance Multi-Client Engine patterned after FileToLink/Thunder.
     """
 
     def __init__(self):
@@ -20,10 +19,7 @@ class ClientPoolManager:
         self.primary_client: Client = None
 
     async def initialize(self):
-        """Initializes primary bot and all auxiliary workers with disk session persistence."""
-        
-
-        logger.info("Initializing primary bot client...")
+        logger.info("Initializing primary MTProto client...")
         self.primary_client = Client(
             name="OmniArchiver_Primary",
             api_id=Config.API_ID,
@@ -32,48 +28,62 @@ class ClientPoolManager:
             plugins=dict(root="bot/plugins"),
             sleep_threshold=Config.SLEEP_THRESHOLD,
             workers=Config.WORKERS,
-            workdir=Config.WORKDIR
+            in_memory=True,
+            max_concurrent_transmissions=1000
         )
 
         try:
             await self.primary_client.start()
-            self.clients.append(self.primary_client)
-            me = await self.primary_client.get_me()
-            logger.info(f"Primary Bot online: @{me.username} [{me.id}]")
-        except FloodWait as fw:
-            logger.error(f"Primary bot login FloodWait: {fw.value}s.")
-            raise fw
-        except Exception as e:
-            logger.error(f"Primary bot failed to start: {e}")
-            raise e
+        except FloodWait as e:
+            logger.warning(f"FloodWait on primary client ({e.value}s) - waiting...")
+            await asyncio.sleep(e.value)
+            await self.primary_client.start()
 
-        # Initialize auxiliary workers (fail-safe: if one worker has cooldown, others continue)
+        self.clients.append(self.primary_client)
+        me = await self.primary_client.get_me()
+        logger.info(f"Primary Bot online: @{me.username} [{me.id}]")
+
+        # Initialize auxiliary workers for dedicated MTProto streaming
         if Config.MULTI_TOKENS:
-            logger.info(f"Setting up {len(Config.MULTI_TOKENS)} auxiliary worker clients...")
-            for idx, token in enumerate(Config.MULTI_TOKENS, start=1):
+            logger.info(f"Setting up {len(Config.MULTI_TOKENS)} auxiliary stream workers...")
+
+            async def start_worker(idx, token):
                 try:
                     worker = Client(
-                        name=f"OmniArchiver_Worker_{idx}",
+                        name=f"Worker_{idx}",
                         api_id=Config.API_ID,
                         api_hash=Config.API_HASH,
                         bot_token=token,
+                        in_memory=True,
+                        no_updates=True,
                         sleep_threshold=Config.SLEEP_THRESHOLD,
-                        workers=2,
-                        workdir=Config.WORKDIR
+                        max_concurrent_transmissions=1000
                     )
-                    await worker.start()
-                    self.clients.append(worker)
-                    w_me = await worker.get_me()
-                    logger.info(f"Auxiliary Worker {idx} online: @{w_me.username}")
-                except FloodWait as fw:
-                    logger.warning(f"Worker {idx} login FloodWait ({fw.value}s) - skipping temporarily.")
-                except Exception as e:
-                    logger.warning(f"Worker {idx} skipped: {e}")
+                    try:
+                        await worker.start()
+                    except FloodWait as e:
+                        logger.warning(f"Worker {idx} FloodWait ({e.value}s), sleeping...")
+                        await asyncio.sleep(e.value)
+                        await worker.start()
 
-        logger.info(f"Client Pool ready with {len(self.clients)} active session(s).")
+                    w_me = await worker.get_me()
+                    logger.info(f"⚡ Stream Worker {idx} online: @{w_me.username}")
+                    return worker
+                except Exception as e:
+                    logger.error(f"Worker {idx} startup note: {e}")
+                    return None
+
+            started_workers = await asyncio.gather(
+                *[start_worker(i, t) for i, t in enumerate(Config.MULTI_TOKENS, start=1)]
+            )
+            for w in started_workers:
+                if w:
+                    self.clients.append(w)
+
+        logger.info(f"🚀 Client Pool active with {len(self.clients)} high-speed session(s)!")
 
     def get_client(self) -> Client:
-        """Returns next client in round-robin sequence to distribute network load."""
+        """Returns next client in round-robin sequence to distribute download bandwidth."""
         if not self.clients:
             return self.primary_client
         client = self.clients[self._current_index % len(self.clients)]
@@ -81,7 +91,6 @@ class ClientPoolManager:
         return client
 
     async def stop_all(self):
-        """Gracefully stops all client sessions."""
         logger.info("Stopping all Pyrofork clients...")
         for client in self.clients:
             try:
