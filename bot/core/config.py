@@ -25,7 +25,7 @@ class Config:
         CHANNELS.append(BIN_CHANNEL_ID)
 
     # --- Server Settings ---
-    BIND_ADDRESS = os.environ.get("BIND_ADDRESS", "0.0.0.0").strip()
+    BIND_ADDRESS = os.environ.get("BIND_ADDRESS", os.environ.get("IP", "0.0.0.0")).strip()
     PORT = int(os.environ.get("PORT", 8080))
     HAS_SSL = os.environ.get("HAS_SSL", "True").lower() in ("true", "1", "yes")
 
