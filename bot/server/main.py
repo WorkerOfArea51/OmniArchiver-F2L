@@ -8,6 +8,7 @@ from bot.database import db
 from bot.database.files import get_file, add_bandwidth_bytes
 from bot.modules.telegram import get_message, get_file_properties
 from bot.modules.static import get_human_size
+from bot.modules.memory import flush_ram
 
 bp = Blueprint('main', __name__)
 
@@ -107,6 +108,7 @@ async def transmit_file(file_code):
         finally:
             if bytes_streamed > 0:
                 await add_bandwidth_bytes(bytes_streamed)
+            flush_ram()
 
     return Response(file_stream(), headers=headers, status=status_code)
 

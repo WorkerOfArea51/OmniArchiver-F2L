@@ -129,3 +129,27 @@ async def purge_command(client, msg: Message):
             "• Send `/purge 20` to delete the last 20 messages.",
             quote=True
         )
+
+@TelegramBot.on_message(filters.command(['clean', 'gc', 'flush']) & filters.private)
+@verify_user
+@verify_admin
+async def clean_memory_command(_, msg: Message):
+    """Manually cleans memory, runs cyclic garbage collection and releases freed heap back to OS."""
+    import psutil
+    from bot.modules.memory import flush_ram
+    from bot.modules.static import get_human_size
+
+    before_ram = psutil.Process(os.getpid()).memory_info().rss
+    flush_ram()
+    after_ram = psutil.Process(os.getpid()).memory_info().rss
+
+    freed = before_ram - after_ram
+    freed_str = get_human_size(max(0, freed))
+    current_str = get_human_size(after_ram)
+
+    await msg.reply(
+        f"🧹 **RAM Cleaned & Compaction Finished!**\n\n"
+        f"📉 **Freed Memory:** `{freed_str}`\n"
+        f"🧠 **Current Bot Process RAM:** `{current_str}`",
+        quote=True
+    )
