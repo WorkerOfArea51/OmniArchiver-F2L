@@ -6,4 +6,6 @@ motor
 pymongo
 dnspython
 aiofiles
+psutil
+
 

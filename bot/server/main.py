@@ -4,7 +4,7 @@ from re import match as re_match
 from .error import abort
 from bot.clients import get_worker_client, TelegramBot
 from bot.config import Telegram, Server
-from bot.database.files import get_file
+from bot.database.files import get_file, add_bandwidth_bytes
 from bot.modules.telegram import get_message, get_file_properties
 
 bp = Blueprint('main', __name__)
@@ -79,26 +79,30 @@ async def transmit_file(file_code):
     async def file_stream():
         bytes_streamed = 0
         chunk_index = 0
-        async for chunk in worker.stream_media(
-            file_msg,
-            offset=offset_chunks,
-            limit=chunks_to_stream,
-        ):
-            if chunk_index == 0:  # Trim initial chunk if offset doesn't align with 1MB boundary
-                trim_start = start % chunk_size
-                if trim_start > 0:
-                    chunk = chunk[trim_start:]
+        try:
+            async for chunk in worker.stream_media(
+                file_msg,
+                offset=offset_chunks,
+                limit=chunks_to_stream,
+            ):
+                if chunk_index == 0:  # Trim initial chunk if offset doesn't align with 1MB boundary
+                    trim_start = start % chunk_size
+                    if trim_start > 0:
+                        chunk = chunk[trim_start:]
 
-            remaining_bytes = content_length - bytes_streamed
-            if remaining_bytes <= 0:
-                break
+                remaining_bytes = content_length - bytes_streamed
+                if remaining_bytes <= 0:
+                    break
 
-            if len(chunk) > remaining_bytes:  # Trim trailing chunk
-                chunk = chunk[:remaining_bytes]
+                if len(chunk) > remaining_bytes:  # Trim trailing chunk
+                    chunk = chunk[:remaining_bytes]
 
-            yield chunk
-            bytes_streamed += len(chunk)
-            chunk_index += 1
+                yield chunk
+                bytes_streamed += len(chunk)
+                chunk_index += 1
+        finally:
+            if bytes_streamed > 0:
+                await add_bandwidth_bytes(bytes_streamed)
 
     return Response(file_stream(), headers=headers, status=status_code)
 

@@ -1,10 +1,33 @@
+import os
+import time
+import shutil
+import psutil
+from datetime import timedelta
 from hydrogram import filters
 from hydrogram.types import Message
 from bot.clients import TelegramBot, worker_clients
 from bot.config import Telegram
-from bot.database.files import get_stats
-from bot.modules.static import WelcomeText, PrivacyText
+from bot.database.files import get_stats, get_bandwidth_stats
+from bot.modules.static import WelcomeText, PrivacyText, get_human_size
 from bot.modules.decorators import verify_user, verify_admin
+
+BOT_START_TIME = time.time()
+
+def get_readable_time(seconds: int) -> str:
+    result = []
+    days, seconds = divmod(seconds, 86400)
+    hours, seconds = divmod(seconds, 3600)
+    minutes, seconds = divmod(seconds, 60)
+    
+    if days > 0:
+        result.append(f"{days}d")
+    if hours > 0:
+        result.append(f"{hours}h")
+    if minutes > 0:
+        result.append(f"{minutes}m")
+    result.append(f"{seconds}s")
+    
+    return " ".join(result)
 
 @TelegramBot.on_message(filters.command(['start', 'help']) & filters.private)
 @verify_user
@@ -24,19 +47,59 @@ async def privacy_command(_, msg: Message):
 @verify_user
 @verify_admin
 async def stats_command(_, msg: Message):
+    # Database counts
     stats = await get_stats()
-    total = sum(stats.values())
+    total_files = sum(stats.values())
     
+    # Bandwidth & Request analytics from MongoDB
+    bytes_streamed, requests_count = await get_bandwidth_stats()
+    bandwidth_str = get_human_size(bytes_streamed)
+
+    # Uptime
+    uptime = get_readable_time(int(time.time() - BOT_START_TIME))
+
+    # Process RAM & CPU
+    try:
+        process = psutil.Process(os.getpid())
+        bot_ram = get_human_size(process.memory_info().rss)
+    except Exception:
+        bot_ram = "N/A"
+
+    try:
+        sys_ram = psutil.virtual_memory()
+        sys_ram_str = f"{get_human_size(sys_ram.used)} / {get_human_size(sys_ram.total)} ({sys_ram.percent}%)"
+    except Exception:
+        sys_ram_str = "N/A"
+
+    try:
+        cpu_usage = f"{psutil.cpu_percent(interval=0.1)}%"
+    except Exception:
+        cpu_usage = "N/A"
+
+    try:
+        disk = shutil.disk_usage('.')
+        disk_pct = round((disk.used / disk.total) * 100, 1)
+        disk_str = f"{get_human_size(disk.used)} / {get_human_size(disk.total)} ({disk_pct}%)"
+    except Exception:
+        disk_str = "N/A"
+
     text = (
-        "📊 **OmniArchiver Database Stats**\n\n"
+        "📊 **OmniArchiver Live System & Database Stats**\n\n"
         f"🎬 **Movies Indexed:** `{stats.get('movies', 0)}`\n"
-        f"📺 **Anime Files:** `{stats.get('anime', 0)}`\n"
-        f"🍿 **Web Series Files:** `{stats.get('webseries', 0)}`\n"
+        f"📺 **Anime Episodes:** `{stats.get('anime', 0)}`\n"
+        f"🍿 **Web Series:** `{stats.get('webseries', 0)}`\n"
         f"📁 **Direct Files:** `{stats.get('direct_files', 0)}`\n"
-        f"{'─'*25}\n"
-        f"📦 **Total Indexed Files:** `{total}`\n"
+        f"📦 **Total Files:** `{total_files}`\n"
+        f"{'─'*28}\n"
         f"🤖 **Active Worker Bots:** `{len(worker_clients)}`\n"
         f"👑 **Admins Registered:** `{len(Telegram.ADMIN_IDS)}`\n"
+        f"⏱️ **System Uptime:** `{uptime}`\n"
+        f"{'─'*28}\n"
+        f"🧠 **Bot Process RAM:** `{bot_ram}`\n"
+        f"💻 **VPS System RAM:** `{sys_ram_str}`\n"
+        f"⚡ **CPU Usage:** `{cpu_usage}`\n"
+        f"💾 **Disk Storage:** `{disk_str}`\n"
+        f"🌐 **Total Bandwidth Streamed:** `{bandwidth_str}` (`{requests_count} hits`)\n"
     )
     await msg.reply(text, quote=True)
 

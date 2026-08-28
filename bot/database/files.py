@@ -151,6 +151,27 @@ async def delete_file(code: str) -> bool:
 
     return False
 
+async def add_bandwidth_bytes(byte_count: int):
+    try:
+        if db.db is not None and byte_count > 0:
+            await db.db['analytics'].update_one(
+                {'_id': 'bandwidth'},
+                {'$inc': {'bytes_streamed': byte_count, 'requests': 1}},
+                upsert=True
+            )
+    except Exception:
+        pass
+
+async def get_bandwidth_stats() -> tuple[int, int]:
+    try:
+        if db.db is not None:
+            doc = await db.db['analytics'].find_one({'_id': 'bandwidth'})
+            if doc:
+                return doc.get('bytes_streamed', 0), doc.get('requests', 0)
+    except Exception:
+        pass
+    return 0, 0
+
 async def get_stats() -> dict:
     stats = {
         'movies': 0,
@@ -176,3 +197,4 @@ async def get_stats() -> dict:
             stats[name] = docs[0]['total'] if docs else 0
 
     return stats
+
