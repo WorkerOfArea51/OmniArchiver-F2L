@@ -14,13 +14,18 @@ WelcomeText = """\
 
 I can generate permanent direct download & high-speed streaming links for files directly from your Telegram channels without duplicating files!
 
-**Commands:**
+**User Commands:**
 🎬 `/link <message_link>` - Index a single movie/file.
 📺 `/batch anime <start_link> <end_link>` - Batch index Anime episodes.
 🍿 `/batch series <start_link> <end_link>` - Batch index Web Series.
-📊 `/stats` - View database statistics (Admins).
 📜 `/privacy` - View Privacy Policy.
 ❓ `/help` - Show this help menu.
+
+**Admin Commands:**
+📊 `/stats` - View live database, RAM, CPU & bandwidth metrics.
+💻 `/sh <cmd>` - Execute a terminal shell command.
+🔄 `/restart` - Restart the bot process.
+🧹 `/purge <count>` - Purge messages in chat (or reply with `/purge`).
 """
 
 PrivacyText = """

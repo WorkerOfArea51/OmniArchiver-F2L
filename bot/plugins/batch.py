@@ -135,11 +135,15 @@ async def batch_command(_, msg: Message):
     # Use the episodes from batch_doc in case it was already indexed
     final_episodes = batch_doc.get('episodes', episodes_list)
 
+    batch_id = batch_doc.get('_id')
+    api_url = f"{Server.BASE_URL}/api/batch/{batch_id}"
+
     # Format output as a single continuous blockquote with full copyable URLs
     header = (
         f"✅ **Batch Indexing Completed!**\n\n"
         f"📁 **Category:** `{category.upper()}`\n"
-        f"📦 **Total Episodes:** `{len(final_episodes)}`\n\n"
+        f"📦 **Total Episodes:** `{len(final_episodes)}`\n"
+        f"🔗 **API URL:** `{api_url}`\n\n"
     )
 
     message_chunks = []

@@ -1,11 +1,13 @@
-from quart import Blueprint, Response, request, render_template, redirect
+from quart import Blueprint, Response, request, render_template, redirect, jsonify
 from math import ceil
 from re import match as re_match
 from .error import abort
 from bot.clients import get_worker_client, TelegramBot
 from bot.config import Telegram, Server
+from bot.database import db
 from bot.database.files import get_file, add_bandwidth_bytes
 from bot.modules.telegram import get_message, get_file_properties
+from bot.modules.static import get_human_size
 
 bp = Blueprint('main', __name__)
 
@@ -17,6 +19,8 @@ async def home():
 @bp.route('/health')
 async def health_check():
     return "OK", 200
+
+# ==================== STREAM & DOWNLOAD ROUTES ====================
 
 @bp.route('/dl/<string:file_code>')
 async def transmit_file(file_code):
@@ -114,3 +118,77 @@ async def stream_file(file_code):
 
     media_url = f'{Server.BASE_URL}/dl/{file_code}'
     return await render_template('player.html', mediaLink=media_url, fileName=doc.get('file_name', 'Play Video'))
+
+# ==================== REST API ENDPOINTS FOR STREAMHUB ====================
+
+@bp.route('/api/batch/<string:batch_id>')
+async def api_get_batch(batch_id):
+    """Returns structured JSON for a specific anime or web series batch."""
+    for col in (db.anime, db.webseries):
+        if col is not None:
+            doc = await col.find_one({'_id': batch_id})
+            if doc:
+                episodes = []
+                for ep in doc.get('episodes', []):
+                    code = ep['code']
+                    episodes.append({
+                        'episode_num': ep.get('episode_num', 1),
+                        'file_name': ep.get('file_name', ''),
+                        'file_size': ep.get('file_size', 0),
+                        'size_formatted': get_human_size(ep.get('file_size', 0)),
+                        'mime_type': ep.get('mime_type', ''),
+                        'stream_url': f"{Server.BASE_URL}/stream/{code}",
+                        'download_url': f"{Server.BASE_URL}/dl/{code}",
+                        'code': code
+                    })
+                return jsonify({
+                    'status': 'success',
+                    'batch_id': batch_id,
+                    'title': doc.get('title', ''),
+                    'category': doc.get('category', ''),
+                    'channel_id': doc.get('channel_id'),
+                    'total_episodes': len(episodes),
+                    'episodes': episodes
+                }), 200
+
+    return jsonify({'status': 'error', 'message': 'Batch not found'}), 404
+
+@bp.route('/api/file/<string:file_code>')
+async def api_get_file(file_code):
+    """Returns structured JSON metadata and streaming links for a single file/movie."""
+    doc = await get_file(file_code)
+    if not doc:
+        return jsonify({'status': 'error', 'message': 'File not found'}), 404
+
+    code = doc.get('code', file_code)
+    return jsonify({
+        'status': 'success',
+        'code': code,
+        'file_name': doc.get('file_name', ''),
+        'file_size': doc.get('file_size', 0),
+        'size_formatted': get_human_size(doc.get('file_size', 0)),
+        'mime_type': doc.get('mime_type', ''),
+        'category': doc.get('category', 'movies'),
+        'stream_url': f"{Server.BASE_URL}/stream/{code}",
+        'download_url': f"{Server.BASE_URL}/dl/{code}"
+    }), 200
+
+@bp.route('/api/movies')
+async def api_get_movies():
+    """Lists indexed movies."""
+    if db.movies is None:
+        return jsonify({'status': 'error', 'message': 'Database not connected'}), 500
+    
+    cursor = db.movies.find().sort('created_at', -1).limit(100)
+    movies = []
+    async for doc in cursor:
+        code = doc.get('code', doc.get('_id'))
+        movies.append({
+            'code': code,
+            'file_name': doc.get('file_name', ''),
+            'file_size': doc.get('file_size', 0),
+            'size_formatted': get_human_size(doc.get('file_size', 0)),
+            'stream_url': f"{Server.BASE_URL}/stream/{code}",
+            'download_url': f"{Server.BASE_URL}/dl/{code}"
+        })
+    return jsonify({'status': 'success', 'count': len(movies), 'movies': movies}), 200
