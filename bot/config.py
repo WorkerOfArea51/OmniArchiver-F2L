@@ -52,8 +52,10 @@ LOGGER_CONFIG_JSON = {
     },
     'handlers': {
         'file_handler': {
-            'class': 'logging.FileHandler',
+            'class': 'logging.handlers.RotatingFileHandler',
             'filename': 'event-log.txt',
+            'maxBytes': 2 * 1024 * 1024,
+            'backupCount': 2,
             'formatter': 'default'
         },
         'stream_handler': {

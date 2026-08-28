@@ -15,7 +15,11 @@ class MongoDatabase:
 
     def connect(self):
         try:
-            self._client = AsyncIOMotorClient(Database.DATABASE_URL)
+            self._client = AsyncIOMotorClient(
+                Database.DATABASE_URL,
+                maxPoolSize=10,  # Keep connection pool compact for low RAM
+                minPoolSize=1
+            )
             self.db = self._client[Database.DATABASE_NAME]
             self.movies = self.db['movies']
             self.anime = self.db['anime']
@@ -25,6 +29,21 @@ class MongoDatabase:
         except Exception as e:
             logger.error("Failed to connect to MongoDB: %s", e)
             raise e
+
+    async def create_indexes(self):
+        """Ensures high-speed O(1) indexes to eliminate query latency and CPU spikes."""
+        try:
+            if self.movies is not None:
+                await self.movies.create_index([("channel_id", 1), ("message_id", 1)])
+            if self.anime is not None:
+                await self.anime.create_index("episodes.code")
+                await self.anime.create_index([("channel_id", 1), ("start_id", 1), ("end_id", 1)])
+            if self.webseries is not None:
+                await self.webseries.create_index("episodes.code")
+                await self.webseries.create_index([("channel_id", 1), ("start_id", 1), ("end_id", 1)])
+            logger.info("MongoDB database indexes ensured.")
+        except Exception as e:
+            logger.warning("Error creating MongoDB indexes: %s", e)
 
     def get_collection(self, category: str):
         cat = category.lower()

@@ -63,6 +63,7 @@ async def start_all_clients():
     # Start Main Bot
     logger.info("Starting Main Telegram Bot...")
     await TelegramBot.start()
+    await db.create_indexes()
 
     # Check and resolve pending restart notification
     if os.path.exists('.restart_state.txt'):
