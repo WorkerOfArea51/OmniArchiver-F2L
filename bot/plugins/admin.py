@@ -58,10 +58,18 @@ async def shell_command(_, msg: Message):
 @verify_user
 @verify_admin
 async def restart_command(_, msg: Message):
-    """Restarts the bot process smoothly."""
-    await msg.reply("🔄 **Restarting OmniArchiver Bot...**\nGive me ~5-10 seconds to reboot!", quote=True)
+    """Restarts the bot process smoothly and notifies user upon coming back online."""
+    import time
+    restart_msg = await msg.reply("🔄 **Restarting OmniArchiver Bot...**\nPlease wait ~5-10 seconds.", quote=True)
 
-    # Touch start.sh to notify Alwaysdata supervisor
+    # Save state to edit message after reboot
+    try:
+        with open('.restart_state.txt', 'w') as f:
+            f.write(f"{msg.chat.id} {restart_msg.id} {time.time()}")
+    except Exception:
+        pass
+
+    # Touch start.sh to notify Alwaysdata supervisor if applicable
     try:
         if os.path.exists("start.sh"):
             os.utime("start.sh", None)

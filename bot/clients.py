@@ -54,12 +54,43 @@ def get_worker_client() -> Client:
     return next(_worker_cycler)
 
 async def start_all_clients():
+    import os
+    import time
+
     # Connect MongoDB
     db.connect()
     
     # Start Main Bot
     logger.info("Starting Main Telegram Bot...")
     await TelegramBot.start()
+
+    # Check and resolve pending restart notification
+    if os.path.exists('.restart_state.txt'):
+        try:
+            with open('.restart_state.txt', 'r') as f:
+                parts = f.read().strip().split()
+            if len(parts) >= 2:
+                chat_id = int(parts[0])
+                msg_id = int(parts[1])
+                duration_str = ""
+                if len(parts) >= 3:
+                    elapsed = round(time.time() - float(parts[2]), 1)
+                    duration_str = f" in `{elapsed}s`"
+                await TelegramBot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=msg_id,
+                    text=(
+                        f"✅ **OmniArchiver Bot rebooted successfully{duration_str}!**\n\n"
+                        f"🚀 All worker bots, MongoDB connection, and web server are active."
+                    )
+                )
+        except Exception as e:
+            logger.warning("Failed to edit restart notification: %s", e)
+        finally:
+            try:
+                os.remove('.restart_state.txt')
+            except Exception:
+                pass
     
     # Start Worker Clients
     init_worker_clients()
