@@ -45,7 +45,7 @@ async def link_command(_, msg: Message):
         if not target_msg or not is_media_message(target_msg):
             return await status_msg.edit_text("❌ Could not find a valid media file in that channel message.\nMake sure the bot is an **Admin** in that channel!")
 
-        file_name, file_size, mime_type = get_file_properties(target_msg)
+        file_name, file_size, mime_type, duration, duration_formatted = get_file_properties(target_msg)
         numeric_chat_id = target_msg.chat.id if target_msg.chat else channel_id
         
         # Save permanently to MongoDB 'movies' collection
@@ -56,13 +56,16 @@ async def link_command(_, msg: Message):
             file_size=file_size,
             mime_type=mime_type,
             user_id=msg.from_user.id,
-            category='movies'
+            category='movies',
+            duration=duration,
+            duration_formatted=duration_formatted
         )
         
         code = doc['code']
         human_size = get_human_size(file_size)
         dl_link = f"{Server.BASE_URL}/dl/{code}"
         stream_link = f"{Server.BASE_URL}/stream/{code}"
+        api_link = f"{Server.BASE_URL}/api/file/{code}"
         
         buttons = [
             [
@@ -77,10 +80,12 @@ async def link_command(_, msg: Message):
         caption = MediaLinksText % {
             'file_name': file_name,
             'file_size': human_size,
+            'duration': duration_formatted,
             'category': 'Movies / Single File',
             'dl_link': dl_link,
             'stream_link': stream_link
         }
+        caption += f"\n⚡ **API:** `{api_link}`"
         
         await status_msg.edit_text(
             text=caption,

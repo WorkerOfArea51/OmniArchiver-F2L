@@ -138,6 +138,8 @@ async def api_get_batch(batch_id):
                         'file_name': ep.get('file_name', ''),
                         'file_size': ep.get('file_size', 0),
                         'size_formatted': get_human_size(ep.get('file_size', 0)),
+                        'duration': ep.get('duration', 0),
+                        'duration_formatted': ep.get('duration_formatted', 'N/A'),
                         'mime_type': ep.get('mime_type', ''),
                         'stream_url': f"{Server.BASE_URL}/stream/{code}",
                         'download_url': f"{Server.BASE_URL}/dl/{code}",
@@ -169,6 +171,8 @@ async def api_get_file(file_code):
         'file_name': doc.get('file_name', ''),
         'file_size': doc.get('file_size', 0),
         'size_formatted': get_human_size(doc.get('file_size', 0)),
+        'duration': doc.get('duration', 0),
+        'duration_formatted': doc.get('duration_formatted', 'N/A'),
         'mime_type': doc.get('mime_type', ''),
         'category': doc.get('category', 'movies'),
         'stream_url': f"{Server.BASE_URL}/stream/{code}",
@@ -190,6 +194,8 @@ async def api_get_movies():
             'file_name': doc.get('file_name', ''),
             'file_size': doc.get('file_size', 0),
             'size_formatted': get_human_size(doc.get('file_size', 0)),
+            'duration': doc.get('duration', 0),
+            'duration_formatted': doc.get('duration_formatted', 'N/A'),
             'stream_url': f"{Server.BASE_URL}/stream/{code}",
             'download_url': f"{Server.BASE_URL}/dl/{code}"
         })

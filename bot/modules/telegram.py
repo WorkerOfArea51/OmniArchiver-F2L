@@ -30,13 +30,15 @@ def is_media_message(msg: Message) -> bool:
     attributes = ('document', 'video', 'audio', 'voice', 'photo', 'video_note')
     return any(getattr(msg, attr, None) is not None for attr in attributes)
 
-def get_file_properties(msg: Message) -> tuple[str, int, str]:
+from bot.modules.static import format_duration
+
+def get_file_properties(msg: Message) -> tuple[str, int, str, int, str]:
     if not msg:
-        return None, 0, 'application/octet-stream'
+        return None, 0, 'application/octet-stream', 0, 'N/A'
         
     attributes = (
-        'document',
         'video',
+        'document',
         'audio',
         'voice',
         'photo',
@@ -51,24 +53,38 @@ def get_file_properties(msg: Message) -> tuple[str, int, str]:
             break
 
     if not media:
-        return None, 0, 'application/octet-stream'
+        return None, 0, 'application/octet-stream', 0, 'N/A'
 
     file_name = getattr(media, 'file_name', None)
-    file_size = getattr(media, 'file_size', 0)
+    file_size = getattr(media, 'file_size', 0) or 0
+    duration = getattr(media, 'duration', 0) or 0
 
+    # If document, inspect attributes for video/audio duration
+    if file_type == 'document' and not duration:
+        for attr in getattr(media, 'attributes', []):
+            if hasattr(attr, 'duration') and attr.duration:
+                duration = attr.duration
+                break
+
+    # If file_name is missing, try message caption or fallback to formatted date
     if not file_name:
-        file_format = {
-            'video': 'mp4',
-            'audio': 'mp3',
-            'voice': 'ogg',
-            'photo': 'jpg',
-            'video_note': 'mp4'
-        }.get(file_type, 'bin')
-        date = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        file_name = f'{file_type}-{date}.{file_format}'
+        if msg.caption:
+            file_name = msg.caption.strip().split('\n')[0]
+        else:
+            file_format = {
+                'video': 'mp4',
+                'audio': 'mp3',
+                'voice': 'ogg',
+                'photo': 'jpg',
+                'video_note': 'mp4'
+            }.get(file_type, 'bin')
+            date = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            file_name = f'{file_type}-{date}.{file_format}'
     
     mime_type = getattr(media, 'mime_type', None)
     if not mime_type:
         mime_type = guess_type(file_name)[0] or 'application/octet-stream'
 
-    return file_name, file_size, mime_type
+    duration_formatted = format_duration(duration)
+
+    return file_name, file_size, mime_type, duration, duration_formatted

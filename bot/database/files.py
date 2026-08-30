@@ -11,7 +11,9 @@ async def save_file(
     mime_type: str,
     user_id: int,
     category: str = 'movies',
-    title: str = None
+    title: str = None,
+    duration: int = 0,
+    duration_formatted: str = "N/A"
 ) -> dict:
     """Saves a single movie or direct file."""
     collection = db.get_collection(category)
@@ -33,6 +35,8 @@ async def save_file(
         'file_name': file_name,
         'file_size': file_size,
         'mime_type': mime_type,
+        'duration': duration,
+        'duration_formatted': duration_formatted,
         'user_id': user_id,
         'category': category.lower(),
         'title': title or file_name,
@@ -114,6 +118,8 @@ async def get_file(code: str, category_hint: str = None) -> dict | None:
                             'file_name': ep['file_name'],
                             'file_size': ep['file_size'],
                             'mime_type': ep['mime_type'],
+                            'duration': ep.get('duration', 0),
+                            'duration_formatted': ep.get('duration_formatted', 'N/A'),
                             'category': batch_doc.get('category', 'anime'),
                             'user_id': batch_doc.get('user_id'),
                             'batch_id': batch_doc['_id']

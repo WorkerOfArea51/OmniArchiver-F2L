@@ -9,6 +9,16 @@ def get_human_size(size_bytes: int) -> str:
     s = round(size_bytes / p, 2)
     return f"{s} {size_name[i]}"
 
+def format_duration(seconds: int | None) -> str:
+    if not seconds or seconds <= 0:
+        return "N/A"
+    seconds = int(seconds)
+    m, s = divmod(seconds, 60)
+    h, m = divmod(m, 60)
+    if h > 0:
+        return f"{h}:{m:02d}:{s:02d}"
+    return f"{m:02d}:{s:02d}"
+
 WelcomeText = """\
 👋 Hi **%(first_name)s**, welcome to **OmniArchiver-F2L**! 🌐
 
@@ -45,6 +55,7 @@ __By using this bot, you agree to this policy.__
 FileLinksText = """
 📂 **File:** `%(file_name)s`
 📦 **Size:** `%(file_size)s`
+⏱️ **Duration:** `%(duration)s`
 🏷️ **Category:** `%(category)s`
 
 📥 **Download Link:**
@@ -52,15 +63,17 @@ FileLinksText = """
 """
 
 MediaLinksText = """
-🎬 **File:** `%(file_name)s`
-📦 **Size:** `%(file_size)s`
+🍿 **Movie / File Indexed!**
+━━━━━━━━━━━━━━━━━━━━━━━
+🎬 **Title:** `%(file_name)s`
+📦 **Size:** `%(file_size)s`  •  ⏱️ **Duration:** `%(duration)s`
 🏷️ **Category:** `%(category)s`
-
-📥 **Download Link:**
-`%(dl_link)s`
-
-▶️ **Stream Link:**
+━━━━━━━━━━━━━━━━━━━━━━━
+🔗 **Stream Online:**
 `%(stream_link)s`
+
+📥 **Direct Download:**
+`%(dl_link)s`
 """
 
 InvalidQueryText = "Query data mismatched."

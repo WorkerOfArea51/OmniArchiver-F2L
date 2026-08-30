@@ -84,7 +84,7 @@ async def batch_command(_, msg: Message):
         try:
             target_msg = await get_message(channel_id, curr_id)
             if target_msg and is_media_message(target_msg):
-                file_name, file_size, mime_type = get_file_properties(target_msg)
+                file_name, file_size, mime_type, duration, duration_formatted = get_file_properties(target_msg)
                 numeric_chat_id = target_msg.chat.id if target_msg.chat else channel_id
                 
                 code = token_hex(Telegram.SECRET_CODE_LENGTH)
@@ -98,6 +98,8 @@ async def batch_command(_, msg: Message):
                     'file_name': file_name,
                     'file_size': file_size,
                     'mime_type': mime_type,
+                    'duration': duration,
+                    'duration_formatted': duration_formatted,
                     'dl_link': dl_link,
                     'stream_link': stream_link
                 })
@@ -137,28 +139,38 @@ async def batch_command(_, msg: Message):
 
     batch_id = batch_doc.get('_id')
     api_url = f"{Server.BASE_URL}/api/batch/{batch_id}"
+    total_batch_size = get_human_size(sum(ep.get('file_size', 0) for ep in final_episodes))
 
-    # Format output as a single continuous blockquote with full copyable URLs
+    # Format output with sleek, clean, modern UI cards
     header = (
-        f"✅ **Batch Indexing Completed!**\n\n"
+        f"🍿 **Batch Indexing Completed!**\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"📁 **Category:** `{category.upper()}`\n"
-        f"📦 **Total Episodes:** `{len(final_episodes)}`\n"
-        f"🔗 **API URL:** `{api_url}`\n\n"
+        f"📦 **Total Episodes:** `{len(final_episodes)}`  •  💾 **Total Size:** `{total_batch_size}`\n"
+        f"⚡ **API Endpoint:** `{api_url}`\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━\n\n"
     )
 
     message_chunks = []
     current_chunk = header
 
-    for item in final_episodes:
-        human_size = get_human_size(item['file_size'])
+    for idx, item in enumerate(final_episodes, start=1):
+        human_size = get_human_size(item.get('file_size', 0))
+        duration_str = item.get('duration_formatted', 'N/A')
         code = item['code']
         dl_link = f"{Server.BASE_URL}/dl/{code}"
         stream_link = f"{Server.BASE_URL}/stream/{code}"
+        ep_num = item.get('episode_num', idx)
+
+        # Clean display title
+        clean_name = item.get('file_name', f'Episode {ep_num}')
+        if clean_name.endswith(('.mkv', '.mp4', '.avi', '.webm', '.ts')):
+            clean_name = clean_name.rsplit('.', 1)[0]
         
         entry = (
-            f"> 🎬 **{item['file_name']}** `({human_size})`\n"
-            f"> ▶️ **Stream:** `{stream_link}`\n"
-            f"> 📥 **Download:** `{dl_link}`\n"
+            f"> 🎬 **EP {ep_num:02d}** • `⏱️ {duration_str}` • `💾 {human_size}`\n"
+            f"> 📝 **{clean_name}**\n"
+            f"> ▶️ [Stream Online]({stream_link})  •  📥 [Direct Download]({dl_link})\n"
             f">\n"
         )
 
