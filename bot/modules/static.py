@@ -25,6 +25,8 @@ WelcomeText = """\
 I can generate permanent direct download & high-speed streaming links for files directly from your Telegram channels without duplicating files!
 
 **User Commands:**
+🔍 `/search <name>` - Search movies, anime & series with streaming links.
+⚡ `/search_api <name>` - Search and get 1-tap copyable API endpoints.
 🎬 `/link <message_link>` - Index a single movie/file.
 📺 `/batch anime <start_link> <end_link>` - Batch index Anime episodes.
 🍿 `/batch series <start_link> <end_link>` - Batch index Web Series.
@@ -33,6 +35,8 @@ I can generate permanent direct download & high-speed streaming links for files 
 
 **Admin Commands:**
 📊 `/stats` - View live database, RAM, CPU & bandwidth metrics.
+⏱️ `/sync_duration` - Auto-backfill video duration for all past records.
+🧹 `/clean` - Flush RAM caches & compact memory.
 💻 `/sh <cmd>` - Execute a terminal shell command.
 🔄 `/restart` - Restart the bot process.
 🧹 `/purge <count>` - Purge messages in chat (or reply with `/purge`).

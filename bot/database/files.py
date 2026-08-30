@@ -204,3 +204,88 @@ async def get_stats() -> dict:
 
     return stats
 
+async def search_records(query: str, limit: int = 15) -> list[dict]:
+    """Searches across movies, anime, webseries, and direct files by title or filename."""
+    import re
+    from bot.config import Server
+    from bot.modules.static import get_human_size
+
+    if not query or not query.strip():
+        return []
+
+    clean_q = query.strip()
+    regex_pattern = re.compile(re.escape(clean_q), re.IGNORECASE)
+    results = []
+
+    # 1. Search in single files (movies, direct_files)
+    for col, cat_name in ((db.movies, 'movies'), (db.direct_files, 'direct_files')):
+        if col is not None and len(results) < limit:
+            cursor = col.find({
+                '$or': [
+                    {'file_name': {'$regex': regex_pattern}},
+                    {'title': {'$regex': regex_pattern}}
+                ]
+            }).sort('created_at', -1).limit(limit - len(results))
+
+            async for doc in cursor:
+                code = doc.get('code', doc.get('_id'))
+                results.append({
+                    'type': 'movie',
+                    'category': cat_name,
+                    'code': code,
+                    'title': doc.get('title') or doc.get('file_name'),
+                    'file_name': doc.get('file_name'),
+                    'file_size': doc.get('file_size', 0),
+                    'size_formatted': get_human_size(doc.get('file_size', 0)),
+                    'duration': doc.get('duration', 0),
+                    'duration_formatted': doc.get('duration_formatted', 'N/A'),
+                    'stream_url': f"{Server.BASE_URL}/stream/{code}",
+                    'download_url': f"{Server.BASE_URL}/dl/{code}",
+                    'api_url': f"{Server.BASE_URL}/api/file/{code}"
+                })
+
+    # 2. Search in batches (anime, webseries)
+    for col, cat_name in ((db.anime, 'anime'), (db.webseries, 'webseries')):
+        if col is not None and len(results) < limit:
+            cursor = col.find({
+                '$or': [
+                    {'title': {'$regex': regex_pattern}},
+                    {'episodes.file_name': {'$regex': regex_pattern}}
+                ]
+            }).sort('created_at', -1).limit(limit - len(results))
+
+            async for batch_doc in cursor:
+                batch_id = batch_doc.get('_id')
+                episodes = batch_doc.get('episodes', [])
+                total_size = sum(ep.get('file_size', 0) for ep in episodes)
+                
+                formatted_episodes = []
+                for ep in episodes:
+                    code = ep['code']
+                    formatted_episodes.append({
+                        'episode_num': ep.get('episode_num', 1),
+                        'file_name': ep.get('file_name', ''),
+                        'file_size': ep.get('file_size', 0),
+                        'size_formatted': get_human_size(ep.get('file_size', 0)),
+                        'duration': ep.get('duration', 0),
+                        'duration_formatted': ep.get('duration_formatted', 'N/A'),
+                        'stream_url': f"{Server.BASE_URL}/stream/{code}",
+                        'download_url': f"{Server.BASE_URL}/dl/{code}",
+                        'code': code
+                    })
+
+                results.append({
+                    'type': 'batch',
+                    'category': cat_name,
+                    'batch_id': batch_id,
+                    'title': batch_doc.get('title') or f"{cat_name.upper()} Batch ({len(episodes)} episodes)",
+                    'total_episodes': len(episodes),
+                    'total_size': total_size,
+                    'size_formatted': get_human_size(total_size),
+                    'api_url': f"{Server.BASE_URL}/api/batch/{batch_id}",
+                    'episodes': formatted_episodes
+                })
+
+    return results[:limit]
+
+
