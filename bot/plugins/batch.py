@@ -17,36 +17,45 @@ from bot.modules.static import InvalidBatchUsageText, get_human_size
 @verify_admin
 async def batch_command(_, msg: Message):
     cmd = msg.command
+
+    # Extract Telegram links and optional category / custom title
+    telegram_links = []
+    other_args = []
+    for arg in cmd[1:]:
+        if 't.me/' in arg:
+            telegram_links.append(arg)
+        else:
+            other_args.append(arg)
+
+    if len(telegram_links) < 2:
+        return await msg.reply(InvalidBatchUsageText, quote=True)
+
+    start_link = telegram_links[0]
+    end_link = telegram_links[1]
+
     category = 'anime'
-    start_link = None
-    end_link = None
+    custom_title = None
 
     if cmd[0] == 'batch_anime':
         category = 'anime'
-        if len(cmd) >= 3:
-            start_link, end_link = cmd[1], cmd[2]
+        custom_title = " ".join(other_args).strip() or None
     elif cmd[0] == 'batch_series':
         category = 'webseries'
-        if len(cmd) >= 3:
-            start_link, end_link = cmd[1], cmd[2]
+        custom_title = " ".join(other_args).strip() or None
     else:
-        # /batch <category> <start> <end> OR /batch <start> <end>
-        if len(cmd) == 4:
-            cat_arg = cmd[1].lower()
-            if cat_arg in ('anime', 'animes'):
+        if other_args:
+            first = other_args[0].lower()
+            if first in ('anime', 'animes'):
                 category = 'anime'
-            elif cat_arg in ('series', 'webseries', 'tv'):
+                custom_title = " ".join(other_args[1:]).strip() or None
+            elif first in ('series', 'webseries', 'tv'):
                 category = 'webseries'
-            elif cat_arg in ('movie', 'movies'):
+                custom_title = " ".join(other_args[1:]).strip() or None
+            elif first in ('movie', 'movies'):
                 category = 'movies'
+                custom_title = " ".join(other_args[1:]).strip() or None
             else:
-                category = 'anime'
-            start_link, end_link = cmd[2], cmd[3]
-        elif len(cmd) == 3:
-            category = 'anime'
-            start_link, end_link = cmd[1], cmd[2]
-        else:
-            return await msg.reply(InvalidBatchUsageText, quote=True)
+                custom_title = " ".join(other_args).strip() or None
 
     # Parse Telegram links
     parsed_start = parse_telegram_link(start_link)
@@ -131,7 +140,8 @@ async def batch_command(_, msg: Message):
         end_id=end_id,
         category=category,
         user_id=msg.from_user.id,
-        episodes=episodes_list
+        episodes=episodes_list,
+        title=custom_title
     )
 
     # Use the episodes from batch_doc in case it was already indexed
