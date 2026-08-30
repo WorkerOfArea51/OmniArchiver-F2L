@@ -48,9 +48,9 @@ async def search_command(_, msg: Message):
 
             card = (
                 f"🎬 **{title}**\n"
-                f"📁 `MOVIE` • ⏱️ `{dur}` • 💾 `{size}`\n"
-                f"> ▶️ [Stream Online]({stream_url})  •  📥 [Direct Download]({download_url})\n"
-                f"> ⚡ **API:** `{api_url}`\n\n"
+                f"📁 `MOVIE`  •  ⏱️ `{dur}`  •  💾 `{size}`\n"
+                f"▶️ [Stream Online]({stream_url})  •  📥 [Direct Download]({download_url})\n"
+                f"⚡ **API:** `{api_url}`\n\n"
             )
         else:
             # Batch item (Anime or Web Series)
@@ -62,12 +62,14 @@ async def search_command(_, msg: Message):
             episodes = item.get('episodes', [])
 
             card = (
-                f"📺 **{title}**\n"
-                f"📁 `{cat}` • 📦 `{total_eps} Episodes` • 💾 `{total_size}`\n"
-                f"⚡ **API:** `{api_url}`\n"
+                f"🍿 **{title}**\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"📁 **Category:** `{cat}`  •  📦 **Episodes:** `{total_eps}`  •  💾 **Total Size:** `{total_size}`\n"
+                f"⚡ **API Endpoint:**\n`{api_url}`\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━\n\n"
             )
 
-            # Render all episodes in the batch
+            # Render all episodes in the batch cleanly
             for ep in episodes:
                 ep_num = ep.get('episode_num', 1)
                 ep_dur = ep.get('duration_formatted', 'N/A')
@@ -76,13 +78,10 @@ async def search_command(_, msg: Message):
                 if ep_name.endswith(('.mkv', '.mp4', '.avi', '.webm', '.ts')):
                     ep_name = ep_name.rsplit('.', 1)[0]
                 card += (
-                    f"> 🎬 **EP {ep_num:02d}** • `⏱️ {ep_dur}` • `💾 {ep_size}`\n"
-                    f"> 📝 **{ep_name}**\n"
-                    f"> ▶️ [Stream Online]({ep['stream_url']})  •  📥 [Direct Download]({ep['download_url']})\n"
-                    f">\n"
+                    f"🎬 **EP {ep_num:02d}**  •  ⏱️ `{ep_dur}`  •  💾 `{ep_size}`\n"
+                    f"📝 **{ep_name}**\n"
+                    f"▶️ [Stream Online]({ep['stream_url']})  •  📥 [Direct Download]({ep['download_url']})\n\n"
                 )
-
-            card += "\n"
 
         if len(current_chunk) + len(card) > 3800:
             message_chunks.append(current_chunk.strip())

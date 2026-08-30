@@ -178,21 +178,20 @@ async def batch_command(_, msg: Message):
             clean_name = clean_name.rsplit('.', 1)[0]
         
         entry = (
-            f"> 🎬 **EP {ep_num:02d}** • `⏱️ {duration_str}` • `💾 {human_size}`\n"
-            f"> 📝 **{clean_name}**\n"
-            f"> ▶️ [Stream Online]({stream_link})  •  📥 [Direct Download]({dl_link})\n"
-            f">\n"
+            f"🎬 **EP {ep_num:02d}**  •  ⏱️ `{duration_str}`  •  💾 `{human_size}`\n"
+            f"📝 **{clean_name}**\n"
+            f"▶️ [Stream Online]({stream_link})  •  📥 [Direct Download]({dl_link})\n\n"
         )
 
         # Telegram message limit is 4096 chars; split into chunks if approaching limit
         if len(current_chunk) + len(entry) > 3800:
-            message_chunks.append(current_chunk.rstrip(">\n"))
+            message_chunks.append(current_chunk.strip())
             current_chunk = entry
         else:
             current_chunk += entry
 
     if current_chunk.strip():
-        message_chunks.append(current_chunk.rstrip(">\n"))
+        message_chunks.append(current_chunk.strip())
 
     # Edit the initial status message with the first batch chunk
     await status_msg.edit_text(message_chunks[0], disable_web_page_preview=True)
