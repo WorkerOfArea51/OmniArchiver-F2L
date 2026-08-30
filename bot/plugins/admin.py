@@ -153,3 +153,76 @@ async def clean_memory_command(_, msg: Message):
         f"🧠 **Current Bot Process RAM:** `{current_str}`",
         quote=True
     )
+
+@TelegramBot.on_message(filters.command(['sync_duration', 'backfill', 'sync_metadata']) & filters.private)
+@verify_user
+@verify_admin
+async def sync_duration_command(_, msg: Message):
+    """Automatically scans all existing files/batches in MongoDB and backfills exact duration."""
+    from bot.database import db
+    from bot.modules.telegram import get_message, get_file_properties
+
+    status = await msg.reply("⏳ **Syncing duration for all existing database records...**\nPlease wait...", quote=True)
+    synced_files = 0
+    synced_batches = 0
+
+    try:
+        # 1. Sync movies and direct files
+        for col in (db.movies, db.direct_files):
+            if col is not None:
+                async for doc in col.find({'duration': {'$in': [None, 0, '']}}):
+                    chan_id = doc.get('channel_id')
+                    msg_id = doc.get('message_id')
+                    if chan_id and msg_id:
+                        try:
+                            t_msg = await get_message(chan_id, msg_id)
+                            if t_msg:
+                                _, _, _, dur, dur_fmt = get_file_properties(t_msg)
+                                await col.update_one(
+                                    {'_id': doc['_id']},
+                                    {'$set': {'duration': dur, 'duration_formatted': dur_fmt}}
+                                )
+                                synced_files += 1
+                        except Exception:
+                            pass
+                    await asyncio.sleep(0.1)
+
+        # 2. Sync anime and webseries batches
+        for col in (db.anime, db.webseries):
+            if col is not None:
+                async for batch_doc in col.find():
+                    chan_id = batch_doc.get('channel_id')
+                    episodes = batch_doc.get('episodes', [])
+                    updated = False
+
+                    for ep in episodes:
+                        if not ep.get('duration'):
+                            msg_id = ep.get('message_id')
+                            if chan_id and msg_id:
+                                try:
+                                    t_msg = await get_message(chan_id, msg_id)
+                                    if t_msg:
+                                        _, _, _, dur, dur_fmt = get_file_properties(t_msg)
+                                        ep['duration'] = dur
+                                        ep['duration_formatted'] = dur_fmt
+                                        updated = True
+                                        synced_files += 1
+                                except Exception:
+                                    pass
+                                await asyncio.sleep(0.1)
+
+                    if updated:
+                        await col.update_one(
+                            {'_id': batch_doc['_id']},
+                            {'$set': {'episodes': episodes}}
+                        )
+                        synced_batches += 1
+
+        await status.edit_text(
+            f"✅ **Duration Backfill Completed Successfully!**\n\n"
+            f"🎬 **Total Episodes/Files Updated:** `{synced_files}`\n"
+            f"📁 **Batches Updated:** `{synced_batches}`\n\n"
+            f"All your existing MongoDB records and REST API endpoints now include exact durations! ⏱️"
+        )
+    except Exception as e:
+        await status.edit_text(f"❌ Error during sync: `{e}`")
