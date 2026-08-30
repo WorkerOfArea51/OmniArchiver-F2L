@@ -226,16 +226,3 @@ async def sync_duration_command(_, msg: Message):
         )
     except Exception as e:
         await status.edit_text(f"❌ Error during sync: `{e}`")
-
-@TelegramBot.on_message(filters.command(['reset_stats', 'reset_bandwidth', 'reset_traffic']) & filters.private)
-@verify_user
-@verify_admin
-async def reset_bandwidth_command(_, msg: Message):
-    """Resets the bandwidth and request counter in MongoDB to zero."""
-    from bot.database import db
-    try:
-        if db.db is not None:
-            await db.db['analytics'].delete_one({'_id': 'bandwidth'})
-        await msg.reply("✅ **Bandwidth and stream counter has been reset to 0 B (0 hits)!**", quote=True)
-    except Exception as e:
-        await msg.reply(f"❌ Error resetting stats: `{e}`", quote=True)
