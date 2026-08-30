@@ -67,9 +67,8 @@ async def search_command(_, msg: Message):
                 f"⚡ **API:** `{api_url}`\n"
             )
 
-            # Show top 4 episodes preview
-            preview_eps = episodes[:4]
-            for ep in preview_eps:
+            # Render all episodes in the batch
+            for ep in episodes:
                 ep_num = ep.get('episode_num', 1)
                 ep_dur = ep.get('duration_formatted', 'N/A')
                 ep_size = ep.get('size_formatted', '0 B')
@@ -78,11 +77,10 @@ async def search_command(_, msg: Message):
                     ep_name = ep_name.rsplit('.', 1)[0]
                 card += (
                     f"> 🎬 **EP {ep_num:02d}** • `⏱️ {ep_dur}` • `💾 {ep_size}`\n"
-                    f"> ▶️ [Stream]({ep['stream_url']}) • 📥 [Download]({ep['download_url']})\n"
+                    f"> 📝 **{ep_name}**\n"
+                    f"> ▶️ [Stream Online]({ep['stream_url']})  •  📥 [Direct Download]({ep['download_url']})\n"
+                    f">\n"
                 )
-
-            if len(episodes) > 4:
-                card += f"> ➕ *...and {len(episodes) - 4} more episodes in this batch.*\n"
 
             card += "\n"
 
