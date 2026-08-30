@@ -150,14 +150,15 @@ async def batch_command(_, msg: Message):
     batch_id = batch_doc.get('_id')
     api_url = f"{Server.BASE_URL}/api/batch/{batch_id}"
     total_batch_size = get_human_size(sum(ep.get('file_size', 0) for ep in final_episodes))
+    display_title = batch_doc.get('title') or custom_title or f"{category.upper()} Batch ({len(final_episodes)} episodes)"
 
     # Format output with sleek, clean, modern UI cards
     header = (
-        f"🍿 **Batch Indexing Completed!**\n"
+        f"🍿 **{display_title}**\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━\n"
         f"📁 **Category:** `{category.upper()}`\n"
         f"📦 **Total Episodes:** `{len(final_episodes)}`  •  💾 **Total Size:** `{total_batch_size}`\n"
-        f"⚡ **API Endpoint:** `{api_url}`\n"
+        f"⚡ **API Endpoint:**\n`{api_url}`\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━\n\n"
     )
 

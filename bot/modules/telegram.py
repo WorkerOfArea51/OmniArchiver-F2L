@@ -66,20 +66,28 @@ def get_file_properties(msg: Message) -> tuple[str, int, str, int, str]:
                 duration = attr.duration
                 break
 
-    # If file_name is missing, try message caption or fallback to formatted date
-    if not file_name:
-        if msg.caption:
-            file_name = msg.caption.strip().split('\n')[0]
+    # Extract clean file_name:
+    # 1. Prefer message caption if it contains the episode/movie title as written in channel
+    if msg.caption:
+        first_line = msg.caption.strip().split('\n')[0].strip()
+        if 3 < len(first_line) < 200:
+            file_name = first_line
         else:
-            file_format = {
-                'video': 'mp4',
-                'audio': 'mp3',
-                'voice': 'ogg',
-                'photo': 'jpg',
-                'video_note': 'mp4'
-            }.get(file_type, 'bin')
-            date = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-            file_name = f'{file_type}-{date}.{file_format}'
+            file_name = getattr(media, 'file_name', None)
+    else:
+        file_name = getattr(media, 'file_name', None)
+
+    # 2. Fallback to timestamp if neither caption nor media.file_name exists
+    if not file_name:
+        file_format = {
+            'video': 'mp4',
+            'audio': 'mp3',
+            'voice': 'ogg',
+            'photo': 'jpg',
+            'video_note': 'mp4'
+        }.get(file_type, 'bin')
+        date = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        file_name = f'{file_type}-{date}.{file_format}'
     
     mime_type = getattr(media, 'mime_type', None)
     if not mime_type:
