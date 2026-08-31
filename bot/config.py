@@ -1,4 +1,26 @@
+import os
 from os import environ as env
+
+# Auto-load variables from start.sh, .env or config.env if present
+def _load_env_files():
+    for fn in ("start.sh", ".env", "config.env"):
+        if os.path.exists(fn):
+            try:
+                with open(fn, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line.startswith("export "):
+                            line = line[7:].strip()
+                        if "=" in line and not line.startswith("#"):
+                            k, v = line.split("=", 1)
+                            k = k.strip()
+                            v = v.strip().strip("\"'")
+                            if k and v:
+                                os.environ[k] = v
+            except Exception:
+                pass
+
+_load_env_files()
 
 class Telegram:
     API_ID = int(env.get("TELEGRAM_API_ID", env.get("API_ID", 12345)))
