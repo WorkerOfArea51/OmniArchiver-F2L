@@ -226,3 +226,42 @@ async def sync_duration_command(_, msg: Message):
         )
     except Exception as e:
         await status.edit_text(f"❌ Error during sync: `{e}`")
+
+@TelegramBot.on_message(filters.command(['revoke', 'del', 'delete_link', 'rm']) & filters.private)
+@verify_user
+@verify_admin
+async def revoke_command(_, msg: Message):
+    """Revokes an existing file link or batch from MongoDB so it can be re-indexed cleanly."""
+    from bot.database.files import get_file, delete_file
+
+    if len(msg.command) < 2:
+        return await msg.reply(
+            "🗑️ **Revoke / Delete Link Command**\n\n"
+            "**Usage:**\n"
+            "• `/revoke <file_code>`\n"
+            "• `/revoke https://streamhub69.alwaysdata.net/dl/<file_code>`\n"
+            "• `/revoke https://streamhub69.alwaysdata.net/stream/<file_code>`\n"
+            "• `/revoke https://streamhub69.alwaysdata.net/api/file/<file_code>`\n\n"
+            "*(You can also simply click the `[🗑️ Revoke]` button under any link card)*",
+            quote=True
+        )
+
+    raw_input = msg.command[1].strip()
+    # Extract code/id from URL if full URL is pasted
+    code = raw_input.rstrip('/').split('/')[-1].strip()
+
+    doc = await get_file(code)
+    if not doc:
+        return await msg.reply("❌ File link not found in database or was already revoked.", quote=True)
+
+    file_title = doc.get('title') or doc.get('file_name', 'N/A')
+    await delete_file(code)
+
+    await msg.reply(
+        f"🗑️ **Link Revoked Successfully!**\n\n"
+        f"🎬 **Title:** `{file_title}`\n"
+        f"🔑 **Code:** `{code}`\n\n"
+        f"✨ The old database record has been cleared. You can now re-generate a fresh link using `/link <channel_post_url>`.",
+        quote=True
+    )
+
