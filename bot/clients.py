@@ -21,6 +21,18 @@ TelegramBot = Client(
 worker_clients: list[Client] = []
 _worker_cycler = None
 
+LAST_HEARTBEAT_TIME = 0.0
+HEARTBEAT_PINGS_COUNT = 0
+
+def record_heartbeat_ping():
+    global LAST_HEARTBEAT_TIME, HEARTBEAT_PINGS_COUNT
+    import time
+    LAST_HEARTBEAT_TIME = time.time()
+    HEARTBEAT_PINGS_COUNT += 1
+
+def get_heartbeat_status() -> tuple[int, float]:
+    return HEARTBEAT_PINGS_COUNT, LAST_HEARTBEAT_TIME
+
 def init_worker_clients():
     global worker_clients, _worker_cycler
     worker_clients.clear()

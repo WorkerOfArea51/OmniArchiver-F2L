@@ -85,10 +85,10 @@ async def stats_command(_, msg: Message):
 
     # 24/7 Heartbeat status
     try:
-        from bot.__main__ import get_heartbeat_status
+        from bot.clients import get_heartbeat_status
         pings_count, last_time = get_heartbeat_status()
         if last_time > 0:
-            elapsed = int(time.time() - last_time)
+            elapsed = max(0, int(time.time() - last_time))
             heartbeat_str = f"Active ({pings_count} pings • {elapsed}s ago)"
         else:
             heartbeat_str = "Active (Starting up...)"
