@@ -14,16 +14,27 @@ def _load_env_files():
                     content
                 )
                 for k, v1, v2, v3 in matches:
-                    v = v1 or v2 or v3
+                    v = (v1 or v2 or v3 or "").strip()
+                    # Resolve bash parameter expansion like ${PORT:-8080}
+                    bash_match = re.match(r'^\$\{([A-Za-z_][A-Za-z0-9_]*):-(.*)\}$', v)
+                    if bash_match:
+                        var_name, default_val = bash_match.groups()
+                        v = os.environ.get(var_name, default_val)
                     if k and v:
-                        os.environ[k] = v.strip()
+                        os.environ[k] = v
             except Exception:
                 pass
 
 _load_env_files()
 
+def _get_int(val, default=0) -> int:
+    try:
+        return int(str(val).strip())
+    except Exception:
+        return default
+
 class Telegram:
-    API_ID = int(env.get("TELEGRAM_API_ID", env.get("API_ID", 12345)))
+    API_ID = _get_int(env.get("TELEGRAM_API_ID", env.get("API_ID", 12345)), 12345)
     API_HASH = env.get("TELEGRAM_API_HASH", env.get("API_HASH", "xyz"))
     
     # Primary Bot
@@ -39,7 +50,7 @@ class Telegram:
     WORKER_TOKENS = list(dict.fromkeys([BOT_TOKEN] + MULTI_BOT_TOKENS)) if MULTI_BOT_TOKENS else [BOT_TOKEN]
 
     # Owner & Auth/Admin Users
-    OWNER_ID = int(env.get("OWNER_ID", 5530237028))
+    OWNER_ID = _get_int(env.get("OWNER_ID", 5530237028), 5530237028)
     _raw_auth_users = env.get("AUTH_USERS", "")
     AUTH_USERS = [
         int(uid.strip()) for uid in _raw_auth_users.replace(",", " ").split() if uid.strip().lstrip("-").isdigit()
@@ -50,8 +61,8 @@ class Telegram:
     ALLOWED_USER_IDS = env.get("ALLOWED_USER_IDS", "").split()
     
     # Optional Storage / Bin Channel ID (Only needed if you upload files directly in private DM)
-    CHANNEL_ID = int(env.get("TELEGRAM_CHANNEL_ID", env.get("CHANNEL_ID", env.get("BIN_CHANNEL_ID", 0))))
-    SECRET_CODE_LENGTH = int(env.get("SECRET_CODE_LENGTH", 24))
+    CHANNEL_ID = _get_int(env.get("TELEGRAM_CHANNEL_ID", env.get("CHANNEL_ID", env.get("BIN_CHANNEL_ID", 0))), 0)
+    SECRET_CODE_LENGTH = _get_int(env.get("SECRET_CODE_LENGTH", 24), 24)
 
 class Database:
     DATABASE_URL = env.get("DATABASE_URL", env.get("MONGODB_URI", "mongodb://localhost:27017"))
@@ -60,7 +71,9 @@ class Database:
 class Server:
     BASE_URL = env.get("BASE_URL", "http://127.0.0.1:8080").rstrip("/")
     BIND_ADDRESS = env.get("BIND_ADDRESS", env.get("IP", "::"))
-    PORT = int(env.get("PORT", 8080))
+    if BIND_ADDRESS.startswith("${"):
+        BIND_ADDRESS = "::"
+    PORT = _get_int(env.get("PORT", 8080), 8080)
 
 # LOGGING CONFIGURATION
 LOGGER_CONFIG_JSON = {
