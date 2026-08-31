@@ -14,20 +14,27 @@ from logging import getLogger
 logger = getLogger('heartbeat')
 
 async def keep_alive_heartbeat():
-    """Keeps all Telegram MTProto worker sockets warm and auto-compacts RAM every 2 minutes."""
+    """Keeps all Telegram MTProto worker sockets warm, auto-reconnects dead sockets, and compacts RAM every 2 minutes."""
     # Short initial delay on boot
     await asyncio.sleep(5)
     while True:
         try:
             active_pings = 0
             for client in list(worker_clients):
-                if client and getattr(client, 'is_connected', False):
+                if client:
                     try:
-                        # Light ping to Telegram DC to keep TCP socket warm & active
+                        if not getattr(client, 'is_connected', False):
+                            await client.connect()
                         await client.get_me()
                         active_pings += 1
                     except Exception:
-                        pass
+                        try:
+                            # Re-establish dead connection socket
+                            await client.connect()
+                            await client.get_me()
+                            active_pings += 1
+                        except Exception:
+                            pass
             record_heartbeat_ping()
             logger.info("💓 Telegram DC heartbeat sent across %d worker(s).", active_pings)
             # Auto-compact RAM
