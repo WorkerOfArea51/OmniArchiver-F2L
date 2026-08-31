@@ -1,22 +1,22 @@
 import os
+import re
 from os import environ as env
 
-# Auto-load variables from start.sh, .env or config.env if present
+# Auto-load variables from start.sh, .env or config.env if present (supporting multi-line quoted strings)
 def _load_env_files():
     for fn in ("start.sh", ".env", "config.env"):
         if os.path.exists(fn):
             try:
                 with open(fn, "r", encoding="utf-8") as f:
-                    for line in f:
-                        line = line.strip()
-                        if line.startswith("export "):
-                            line = line[7:].strip()
-                        if "=" in line and not line.startswith("#"):
-                            k, v = line.split("=", 1)
-                            k = k.strip()
-                            v = v.strip().strip("\"'")
-                            if k and v:
-                                os.environ[k] = v
+                    content = f.read()
+                matches = re.findall(
+                    r'(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|([^\s#]+))',
+                    content
+                )
+                for k, v1, v2, v3 in matches:
+                    v = v1 or v2 or v3
+                    if k and v:
+                        os.environ[k] = v.strip()
             except Exception:
                 pass
 
