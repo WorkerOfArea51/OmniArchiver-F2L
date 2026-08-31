@@ -14,7 +14,8 @@ TelegramBot = Client(
     bot_token=Telegram.BOT_TOKEN,
     plugins=dict(root='bot.plugins'),
     sleep_threshold=-1,
-    max_concurrent_transmissions=10
+    max_concurrent_transmissions=10,
+    ipv6=False
 )
 
 # Multi-Client Worker Pool (Used for fast parallel chunk downloading and streaming)
@@ -50,7 +51,8 @@ def init_worker_clients():
                 bot_token=token,
                 sleep_threshold=-1,
                 max_concurrent_transmissions=10,
-                no_updates=True
+                no_updates=True,
+                ipv6=False
             )
             worker_clients.append(worker)
         

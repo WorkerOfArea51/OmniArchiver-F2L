@@ -80,68 +80,41 @@ async def transmit_file(file_code):
 
     async def file_stream():
         bytes_streamed = 0
-        initial_worker = get_worker_client() or TelegramBot
-        
-        # Build client fallback list starting with initial_worker, then remaining workers, and always ending with TelegramBot
-        clients_to_try = [initial_worker]
-        for c in worker_clients:
-            if c not in clients_to_try:
-                clients_to_try.append(c)
-        if TelegramBot not in clients_to_try:
-            clients_to_try.append(TelegramBot)
+        current_start = start
+        offset = current_start // chunk_size
+        remaining_total = end - current_start + 1
+        chunks_needed = ceil(remaining_total / chunk_size)
 
-        for client in clients_to_try:
-            try:
-                chunk_index = 0
-                current_start = start + bytes_streamed
-                offset = current_start // chunk_size
-                remaining_total = end - current_start + 1
-                chunks_needed = ceil(remaining_total / chunk_size)
+        try:
+            chunk_index = 0
+            async for chunk in TelegramBot.stream_media(
+                file_msg,
+                offset=offset,
+                limit=chunks_needed,
+            ):
+                if chunk_index == 0:
+                    trim_start = current_start % chunk_size
+                    if trim_start > 0:
+                        chunk = chunk[trim_start:]
 
-                # Fetch client-bound message if available
-                msg = file_msg
-                if client != TelegramBot:
-                    c_msg = await get_message(channel_id, message_id, client=client)
-                    if c_msg:
-                        msg = c_msg
-
-                async for chunk in client.stream_media(
-                    msg,
-                    offset=offset,
-                    limit=chunks_needed,
-                ):
-                    if chunk_index == 0:
-                        trim_start = current_start % chunk_size
-                        if trim_start > 0:
-                            chunk = chunk[trim_start:]
-
-                    remaining_bytes = content_length - bytes_streamed
-                    if remaining_bytes <= 0:
-                        break
-
-                    if len(chunk) > remaining_bytes:
-                        chunk = chunk[:remaining_bytes]
-
-                    yield chunk
-                    bytes_streamed += len(chunk)
-                    chunk_index += 1
-
-                # If all requested bytes were streamed, we are done
-                if bytes_streamed >= content_length:
+                remaining_bytes = content_length - bytes_streamed
+                if remaining_bytes <= 0:
                     break
 
-            except (asyncio.CancelledError, GeneratorExit):
-                # Player disconnected or seeked away - clean up immediately
-                break
-            except Exception as e:
-                logger.warning("Stream chunk interrupted on %s (%s). Failing over at byte %d...", getattr(client, 'name', 'client'), e, start + bytes_streamed)
-                if bytes_streamed >= content_length:
-                    break
-                await asyncio.sleep(0.05)
+                if len(chunk) > remaining_bytes:
+                    chunk = chunk[:remaining_bytes]
 
-        if bytes_streamed > 0:
-            await add_bandwidth_bytes(bytes_streamed)
-        flush_ram()
+                yield chunk
+                bytes_streamed += len(chunk)
+                chunk_index += 1
+        except (asyncio.CancelledError, GeneratorExit):
+            pass
+        except Exception as e:
+            logger.warning("Stream error on TelegramBot: %s", e)
+        finally:
+            if bytes_streamed > 0:
+                await add_bandwidth_bytes(bytes_streamed)
+            flush_ram()
 
     return Response(file_stream(), headers=headers, status=status_code)
 
