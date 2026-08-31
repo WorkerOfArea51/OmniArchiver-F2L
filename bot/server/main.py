@@ -105,6 +105,11 @@ async def transmit_file(file_code):
                 yield chunk
                 bytes_streamed += len(chunk)
                 chunk_index += 1
+        except (asyncio.CancelledError, GeneratorExit):
+            # Player disconnected or seeked to a new timestamp - clean up immediately
+            pass
+        except Exception:
+            pass
         finally:
             if bytes_streamed > 0:
                 await add_bandwidth_bytes(bytes_streamed)
