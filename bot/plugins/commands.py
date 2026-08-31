@@ -83,6 +83,18 @@ async def stats_command(_, msg: Message):
     except Exception:
         disk_str = "N/A"
 
+    # 24/7 Heartbeat status
+    try:
+        from bot.__main__ import get_heartbeat_status
+        pings_count, last_time = get_heartbeat_status()
+        if last_time > 0:
+            elapsed = int(time.time() - last_time)
+            heartbeat_str = f"Active ({pings_count} pings • {elapsed}s ago)"
+        else:
+            heartbeat_str = "Active (Starting up...)"
+    except Exception:
+        heartbeat_str = "Active"
+
     text = (
         "📊 **OmniArchiver Live System & Database Stats**\n\n"
         f"🎬 **Movies Indexed:** `{stats.get('movies', 0)}`\n"
@@ -94,6 +106,7 @@ async def stats_command(_, msg: Message):
         f"🤖 **Active Worker Bots:** `{len(worker_clients)}`\n"
         f"👑 **Admins Registered:** `{len(Telegram.ADMIN_IDS)}`\n"
         f"⏱️ **System Uptime:** `{uptime}`\n"
+        f"💓 **24/7 Heartbeat:** `{heartbeat_str}`\n"
         f"{'─'*28}\n"
         f"🧠 **Bot Process RAM:** `{bot_ram}`\n"
         f"💻 **VPS System RAM:** `{sys_ram_str}`\n"
