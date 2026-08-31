@@ -33,10 +33,10 @@ async def transmit_file(file_code):
     channel_id = doc.get('channel_id')
     message_id = doc.get('message_id')
 
-    # Get a worker client from the multi-client pool
-    worker = get_worker_client() or TelegramBot
-
-    file_msg = await get_message(channel_id, message_id, client=worker)
+    # Get message with TelegramBot (guaranteed channel admin) or worker
+    file_msg = await get_message(channel_id, message_id, client=TelegramBot)
+    if not file_msg:
+        file_msg = await get_message(channel_id, message_id, client=get_worker_client())
     if not file_msg:
         abort(404, 'Media message not found in channel.')
 
@@ -66,10 +66,7 @@ async def transmit_file(file_code):
         else:
             abort(400, 'Invalid Range header')
 
-    offset_chunks = start // chunk_size
     total_bytes_to_stream = end - start + 1
-    chunks_to_stream = ceil(total_bytes_to_stream / chunk_size)
-
     content_length = total_bytes_to_stream
     headers = {
         'Content-Type': mime_type or 'application/octet-stream',
@@ -83,9 +80,17 @@ async def transmit_file(file_code):
 
     async def file_stream():
         bytes_streamed = 0
-        current_worker = worker
+        initial_worker = get_worker_client() or TelegramBot
+        
+        # Build client fallback list starting with initial_worker, then remaining workers, and always ending with TelegramBot
+        clients_to_try = [initial_worker]
+        for c in worker_clients:
+            if c not in clients_to_try:
+                clients_to_try.append(c)
+        if TelegramBot not in clients_to_try:
+            clients_to_try.append(TelegramBot)
 
-        for attempt in range(max(1, len(worker_clients))):
+        for client in clients_to_try:
             try:
                 chunk_index = 0
                 current_start = start + bytes_streamed
@@ -93,10 +98,14 @@ async def transmit_file(file_code):
                 remaining_total = end - current_start + 1
                 chunks_needed = ceil(remaining_total / chunk_size)
 
-                # Use current worker or fetch message if worker rotated
-                msg = file_msg if current_worker == worker else (await get_message(channel_id, message_id, client=current_worker) or file_msg)
+                # Fetch client-bound message if available
+                msg = file_msg
+                if client != TelegramBot:
+                    c_msg = await get_message(channel_id, message_id, client=client)
+                    if c_msg:
+                        msg = c_msg
 
-                async for chunk in current_worker.stream_media(
+                async for chunk in client.stream_media(
                     msg,
                     offset=offset,
                     limit=chunks_needed,
@@ -122,15 +131,13 @@ async def transmit_file(file_code):
                     break
 
             except (asyncio.CancelledError, GeneratorExit):
-                # Player disconnected or seeked to a new timestamp - clean up immediately
+                # Player disconnected or seeked away - clean up immediately
                 break
             except Exception as e:
-                logger.warning("Stream chunk interrupted (%s). Auto-recovering stream at byte %d...", e, start + bytes_streamed)
-                # Rotate to another worker client to resume streaming seamlessly
-                current_worker = get_worker_client() or TelegramBot
+                logger.warning("Stream chunk interrupted on %s (%s). Failing over at byte %d...", getattr(client, 'name', 'client'), e, start + bytes_streamed)
                 if bytes_streamed >= content_length:
                     break
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(0.05)
 
         if bytes_streamed > 0:
             await add_bandwidth_bytes(bytes_streamed)
