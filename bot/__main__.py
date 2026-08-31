@@ -18,9 +18,10 @@ def get_heartbeat_status() -> tuple[int, float]:
 async def keep_alive_heartbeat():
     """Keeps all Telegram MTProto worker sockets warm and auto-compacts RAM every 2 minutes."""
     global LAST_HEARTBEAT_TIME, HEARTBEAT_PINGS_COUNT
+    # Short initial delay on boot
+    await asyncio.sleep(5)
     while True:
         try:
-            await asyncio.sleep(120)  # Every 2 minutes
             active_pings = 0
             for client in list(worker_clients):
                 if client and getattr(client, 'is_connected', False):
@@ -35,10 +36,11 @@ async def keep_alive_heartbeat():
             logger.info("💓 Telegram DC heartbeat sent across %d worker(s).", active_pings)
             # Auto-compact RAM
             flush_ram()
+            await asyncio.sleep(120)  # Every 2 minutes
         except asyncio.CancelledError:
             break
         except Exception:
-            pass
+            await asyncio.sleep(10)
 
 async def main():
     await start_all_clients()
