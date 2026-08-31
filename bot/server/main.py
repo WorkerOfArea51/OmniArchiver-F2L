@@ -83,37 +83,58 @@ async def transmit_file(file_code):
 
     async def file_stream():
         bytes_streamed = 0
-        chunk_index = 0
-        try:
-            async for chunk in worker.stream_media(
-                file_msg,
-                offset=offset_chunks,
-                limit=chunks_to_stream,
-            ):
-                if chunk_index == 0:  # Trim initial chunk if offset doesn't align with 1MB boundary
-                    trim_start = start % chunk_size
-                    if trim_start > 0:
-                        chunk = chunk[trim_start:]
+        current_worker = worker
 
-                remaining_bytes = content_length - bytes_streamed
-                if remaining_bytes <= 0:
+        for attempt in range(max(1, len(worker_clients))):
+            try:
+                chunk_index = 0
+                current_start = start + bytes_streamed
+                offset = current_start // chunk_size
+                remaining_total = end - current_start + 1
+                chunks_needed = ceil(remaining_total / chunk_size)
+
+                # Use current worker or fetch message if worker rotated
+                msg = file_msg if current_worker == worker else (await get_message(channel_id, message_id, client=current_worker) or file_msg)
+
+                async for chunk in current_worker.stream_media(
+                    msg,
+                    offset=offset,
+                    limit=chunks_needed,
+                ):
+                    if chunk_index == 0:
+                        trim_start = current_start % chunk_size
+                        if trim_start > 0:
+                            chunk = chunk[trim_start:]
+
+                    remaining_bytes = content_length - bytes_streamed
+                    if remaining_bytes <= 0:
+                        break
+
+                    if len(chunk) > remaining_bytes:
+                        chunk = chunk[:remaining_bytes]
+
+                    yield chunk
+                    bytes_streamed += len(chunk)
+                    chunk_index += 1
+
+                # If all requested bytes were streamed, we are done
+                if bytes_streamed >= content_length:
                     break
 
-                if len(chunk) > remaining_bytes:  # Trim trailing chunk
-                    chunk = chunk[:remaining_bytes]
+            except (asyncio.CancelledError, GeneratorExit):
+                # Player disconnected or seeked to a new timestamp - clean up immediately
+                break
+            except Exception as e:
+                logger.warning("Stream chunk interrupted (%s). Auto-recovering stream at byte %d...", e, start + bytes_streamed)
+                # Rotate to another worker client to resume streaming seamlessly
+                current_worker = get_worker_client() or TelegramBot
+                if bytes_streamed >= content_length:
+                    break
+                await asyncio.sleep(0.1)
 
-                yield chunk
-                bytes_streamed += len(chunk)
-                chunk_index += 1
-        except (asyncio.CancelledError, GeneratorExit):
-            # Player disconnected or seeked to a new timestamp - clean up immediately
-            pass
-        except Exception:
-            pass
-        finally:
-            if bytes_streamed > 0:
-                await add_bandwidth_bytes(bytes_streamed)
-            flush_ram()
+        if bytes_streamed > 0:
+            await add_bandwidth_bytes(bytes_streamed)
+        flush_ram()
 
     return Response(file_stream(), headers=headers, status=status_code)
 
