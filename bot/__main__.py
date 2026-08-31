@@ -1,6 +1,6 @@
 import asyncio
 from hydrogram import idle
-from bot.clients import start_all_clients, stop_all_clients, TelegramBot, MultiClients
+from bot.clients import start_all_clients, stop_all_clients, TelegramBot, worker_clients
 from bot.server import server
 from bot.modules.memory import flush_ram
 
@@ -9,8 +9,8 @@ async def keep_alive_heartbeat():
     while True:
         try:
             await asyncio.sleep(120)  # Every 2 minutes
-            for client in MultiClients.values():
-                if client and client.is_connected:
+            for client in list(worker_clients):
+                if client and getattr(client, 'is_connected', False):
                     try:
                         # Light ping to Telegram DC to keep TCP socket warm & active
                         await client.get_me()
