@@ -204,8 +204,8 @@ async def get_stats() -> dict:
 
     return stats
 
-async def search_records(query: str, limit: int = 15) -> list[dict]:
-    """Searches across movies, anime, webseries, and direct files by title or filename."""
+async def search_records(query: str, limit: int = 30) -> list[dict]:
+    """Searches across movies, anime, webseries, and direct files by title or filename with smart multi-word matching."""
     import re
     from bot.config import Server
     from bot.modules.static import get_human_size
@@ -214,18 +214,42 @@ async def search_records(query: str, limit: int = 15) -> list[dict]:
         return []
 
     clean_q = query.strip()
-    regex_pattern = re.compile(re.escape(clean_q), re.IGNORECASE)
+    words = [re.escape(w) for w in clean_q.split() if len(w) > 1]
+    phrase_pattern = re.compile(re.escape(clean_q), re.IGNORECASE)
+
+    # Build smart multi-word token filters (matches docs containing query words)
+    if words:
+        single_word_conds = [
+            {
+                '$or': [
+                    {'file_name': {'$regex': w, '$options': 'i'}},
+                    {'title': {'$regex': w, '$options': 'i'}}
+                ]
+            }
+            for w in words
+        ]
+        single_filter = {'$or': [{'file_name': {'$regex': phrase_pattern}}, {'title': {'$regex': phrase_pattern}}, {'$and': single_word_conds}]}
+
+        batch_word_conds = [
+            {
+                '$or': [
+                    {'title': {'$regex': w, '$options': 'i'}},
+                    {'episodes.file_name': {'$regex': w, '$options': 'i'}}
+                ]
+            }
+            for w in words
+        ]
+        batch_filter = {'$or': [{'title': {'$regex': phrase_pattern}}, {'episodes.file_name': {'$regex': phrase_pattern}}, {'$and': batch_word_conds}]}
+    else:
+        single_filter = {'$or': [{'file_name': {'$regex': phrase_pattern}}, {'title': {'$regex': phrase_pattern}}]}
+        batch_filter = {'$or': [{'title': {'$regex': phrase_pattern}}, {'episodes.file_name': {'$regex': phrase_pattern}}]}
+
     results = []
 
     # 1. Search in single files (movies, direct_files)
     for col, cat_name in ((db.movies, 'movies'), (db.direct_files, 'direct_files')):
         if col is not None and len(results) < limit:
-            cursor = col.find({
-                '$or': [
-                    {'file_name': {'$regex': regex_pattern}},
-                    {'title': {'$regex': regex_pattern}}
-                ]
-            }).sort('created_at', -1).limit(limit - len(results))
+            cursor = col.find(single_filter).sort('created_at', -1).limit(limit - len(results))
 
             async for doc in cursor:
                 code = doc.get('code', doc.get('_id'))
@@ -247,12 +271,7 @@ async def search_records(query: str, limit: int = 15) -> list[dict]:
     # 2. Search in batches (anime, webseries)
     for col, cat_name in ((db.anime, 'anime'), (db.webseries, 'webseries')):
         if col is not None and len(results) < limit:
-            cursor = col.find({
-                '$or': [
-                    {'title': {'$regex': regex_pattern}},
-                    {'episodes.file_name': {'$regex': regex_pattern}}
-                ]
-            }).sort('created_at', -1).limit(limit - len(results))
+            cursor = col.find(batch_filter).sort('created_at', -1).limit(limit - len(results))
 
             async for batch_doc in cursor:
                 batch_id = batch_doc.get('_id')

@@ -23,7 +23,7 @@ async def search_command(_, msg: Message):
     query = msg.text.split(maxsplit=1)[1].strip()
     status_msg = await msg.reply(f"🔎 *Searching for* `{query}`...", quote=True)
 
-    results = await search_records(query, limit=10)
+    results = await search_records(query, limit=30)
 
     if not results:
         return await status_msg.edit_text(f"❌ **No results found for:** `{query}`\nMake sure the spelling is correct!")
@@ -31,11 +31,14 @@ async def search_command(_, msg: Message):
     header = (
         f"🔍 **Search Results for:** `{query}`\n"
         f"━━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"📦 **Found:** `{len(results)} matching titles`\n\n"
+        f"📦 **Found:** `{len(results)} matching title(s)`\n\n"
     )
 
     message_chunks = []
     current_chunk = header
+
+    # If there is only 1 result and it's a batch, render episodes directly
+    render_inline_episodes = (len(results) == 1 and results[0]['type'] == 'batch')
 
     for item in results:
         if item['type'] == 'movie':
@@ -52,6 +55,11 @@ async def search_command(_, msg: Message):
                 f"▶️ [Stream Online]({stream_url})  •  📥 [Direct Download]({download_url})\n"
                 f"⚡ **API:** `{api_url}`\n\n"
             )
+            if len(current_chunk) + len(card) > 3600:
+                message_chunks.append(current_chunk.strip())
+                current_chunk = card
+            else:
+                current_chunk += card
         else:
             # Batch item (Anime or Web Series)
             title = item.get('title', 'Batch')
@@ -59,44 +67,140 @@ async def search_command(_, msg: Message):
             total_eps = item.get('total_episodes', 0)
             total_size = item.get('size_formatted', '0 B')
             api_url = item['api_url']
+            batch_id = item.get('batch_id')
             episodes = item.get('episodes', [])
 
-            card = (
-                f"🍿 **{title}**\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"📁 **Category:** `{cat}`  •  📦 **Episodes:** `{total_eps}`  •  💾 **Total Size:** `{total_size}`\n"
-                f"⚡ **API Endpoint:**\n`{api_url}`\n"
-                f"━━━━━━━━━━━━━━━━━━━━━━━\n\n"
-            )
-
-            # Render all episodes in the batch cleanly
-            for ep in episodes:
-                ep_num = ep.get('episode_num', 1)
-                ep_dur = ep.get('duration_formatted', 'N/A')
-                ep_size = ep.get('size_formatted', '0 B')
-                ep_name = ep.get('file_name', f'Episode {ep_num}')
-                if ep_name.endswith(('.mkv', '.mp4', '.avi', '.webm', '.ts')):
-                    ep_name = ep_name.rsplit('.', 1)[0]
-                card += (
-                    f"🎬 **EP {ep_num:02d}**  •  ⏱️ `{ep_dur}`  •  💾 `{ep_size}`\n"
-                    f"📝 **{ep_name}**\n"
-                    f"▶️ [Stream Online]({ep['stream_url']})  •  📥 [Direct Download]({ep['download_url']})\n\n"
+            if render_inline_episodes:
+                batch_header = (
+                    f"🍿 **{title}**\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━━\n"
+                    f"📁 **Category:** `{cat}`  •  📦 **Episodes:** `{total_eps}`  •  💾 **Total Size:** `{total_size}`\n"
+                    f"⚡ **API Endpoint:**\n`{api_url}`\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━━\n\n"
                 )
+                if len(current_chunk) + len(batch_header) > 3600:
+                    message_chunks.append(current_chunk.strip())
+                    current_chunk = batch_header
+                else:
+                    current_chunk += batch_header
 
-        if len(current_chunk) + len(card) > 3800:
-            message_chunks.append(current_chunk.strip())
+                for ep in episodes:
+                    ep_num = ep.get('episode_num', 1)
+                    ep_dur = ep.get('duration_formatted', 'N/A')
+                    ep_size = ep.get('size_formatted', '0 B')
+                    ep_name = ep.get('file_name', f'Episode {ep_num}')
+                    if ep_name.endswith(('.mkv', '.mp4', '.avi', '.webm', '.ts')):
+                        ep_name = ep_name.rsplit('.', 1)[0]
+                    ep_card = (
+                        f"🎬 **EP {ep_num:02d}**  •  ⏱️ `{ep_dur}`  •  💾 `{ep_size}`\n"
+                        f"📝 **{ep_name}**\n"
+                        f"▶️ [Stream Online]({ep['stream_url']})  •  📥 [Direct Download]({ep['download_url']})\n\n"
+                    )
+                    if len(current_chunk) + len(ep_card) > 3600:
+                        message_chunks.append(current_chunk.strip())
+                        current_chunk = ep_card
+                    else:
+                        current_chunk += ep_card
+            else:
+                card = (
+                    f"🍿 **{title}**\n"
+                    f"📁 `{cat}`  •  📦 `{total_eps} Episodes`  •  💾 `{total_size}`\n"
+                    f"⚡ **API:** `{api_url}`\n"
+                    f"👉 **View Episodes:** `/episodes_{batch_id}`\n\n"
+                )
+                if len(current_chunk) + len(card) > 3600:
+                    message_chunks.append(current_chunk.strip())
+                    current_chunk = card
+                else:
+                    current_chunk += card
+
+    if current_chunk.strip():
+        message_chunks.append(current_chunk.strip())
+
+    if message_chunks:
+        await status_msg.edit_text(message_chunks[0], disable_web_page_preview=True)
+        for follow_up in message_chunks[1:]:
+            await msg.reply(follow_up, quote=False, disable_web_page_preview=True)
+            await asyncio.sleep(0.5)
+
+@TelegramBot.on_message((filters.command(['episodes', 'eps', 'view_batch']) | filters.regex(r'^/episodes_([a-zA-Z0-9]+)')) & filters.private)
+@verify_user
+async def view_episodes_command(_, msg: Message):
+    """Outputs all individual episode stream & download links for a specific batch, cleanly chunked."""
+    from bot.database import db
+
+    batch_id = None
+    if msg.matches:
+        batch_id = msg.matches[0].group(1)
+    elif len(msg.command) > 1:
+        batch_id = msg.command[1].strip()
+
+    if not batch_id:
+        return await msg.reply("Usage: `/episodes <batch_id>`", quote=True)
+
+    status_msg = await msg.reply("⏳ *Loading episodes...*", quote=True)
+
+    batch_doc = None
+    for col in (db.anime, db.webseries):
+        if col is not None:
+            batch_doc = await col.find_one({'_id': batch_id})
+            if batch_doc:
+                break
+
+    if not batch_doc:
+        return await status_msg.edit_text(f"❌ Batch `{batch_id}` not found in database.")
+
+    title = batch_doc.get('title', 'Batch')
+    cat = batch_doc.get('category', 'ANIME').upper()
+    episodes = batch_doc.get('episodes', [])
+    total_size = sum(ep.get('file_size', 0) for ep in episodes)
+    from bot.modules.static import get_human_size
+    size_str = get_human_size(total_size)
+    from bot.config import Server
+    api_url = f"{Server.BASE_URL}/api/batch/{batch_id}"
+
+    header = (
+        f"🍿 **{title}**\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━\n"
+        f"📁 **Category:** `{cat}`  •  📦 **Episodes:** `{len(episodes)}`  •  💾 **Total Size:** `{size_str}`\n"
+        f"⚡ **API Endpoint:**\n`{api_url}`\n"
+        f"━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+    )
+
+    chunks = []
+    current_chunk = header
+
+    for ep in episodes:
+        ep_num = ep.get('episode_num', 1)
+        dur = ep.get('duration_formatted', 'N/A')
+        size = ep.get('size_formatted', '0 B')
+        code = ep.get('code')
+        stream_url = f"{Server.BASE_URL}/stream/{code}"
+        download_url = f"{Server.BASE_URL}/dl/{code}"
+        name = ep.get('file_name', f'Episode {ep_num}')
+        if name.endswith(('.mkv', '.mp4', '.avi', '.webm', '.ts')):
+            name = name.rsplit('.', 1)[0]
+
+        card = (
+            f"🎬 **EP {ep_num:02d}**  •  ⏱️ `{dur}`  •  💾 `{size}`\n"
+            f"📝 **{name}**\n"
+            f"▶️ [Stream Online]({stream_url})  •  📥 [Direct Download]({download_url})\n\n"
+        )
+
+        if len(current_chunk) + len(card) > 3600:
+            chunks.append(current_chunk.strip())
             current_chunk = card
         else:
             current_chunk += card
 
     if current_chunk.strip():
-        message_chunks.append(current_chunk.strip())
+        chunks.append(current_chunk.strip())
 
-    await status_msg.edit_text(message_chunks[0], disable_web_page_preview=True)
-
-    for follow_up in message_chunks[1:]:
-        await msg.reply(follow_up, quote=False, disable_web_page_preview=True)
-        await asyncio.sleep(0.5)
+    if chunks:
+        await status_msg.edit_text(chunks[0], disable_web_page_preview=True)
+        for follow_up in chunks[1:]:
+            await msg.reply(follow_up, quote=False, disable_web_page_preview=True)
+            await asyncio.sleep(0.5)
 
 @TelegramBot.on_message(filters.command(['search_api', 'api_search', 'get_api']) & filters.private)
 @verify_user
@@ -115,7 +219,7 @@ async def search_api_command(_, msg: Message):
     query = msg.text.split(maxsplit=1)[1].strip()
     status_msg = await msg.reply(f"⚡ *Fetching API endpoints for* `{query}`...", quote=True)
 
-    results = await search_records(query, limit=15)
+    results = await search_records(query, limit=30)
 
     if not results:
         return await status_msg.edit_text(f"❌ **No API endpoints found for:** `{query}`")
