@@ -76,12 +76,28 @@ async def stats_command(_, msg: Message):
     except Exception:
         cpu_usage = "N/A"
 
+    # Actual Bot Project Disk Space vs Shared Host Node Storage
+    try:
+        bot_disk_bytes = 0
+        for root, dirs, files in os.walk('.'):
+            if '.git' in dirs:
+                dirs.remove('.git')
+            for f in files:
+                fp = os.path.join(root, f)
+                try:
+                    bot_disk_bytes += os.path.getsize(fp)
+                except OSError:
+                    pass
+        bot_disk_str = get_human_size(bot_disk_bytes)
+    except Exception:
+        bot_disk_str = "N/A"
+
     try:
         disk = shutil.disk_usage('.')
         disk_pct = round((disk.used / disk.total) * 100, 1)
-        disk_str = f"{get_human_size(disk.used)} / {get_human_size(disk.total)} ({disk_pct}%)"
+        host_disk_str = f"{get_human_size(disk.used)} / {get_human_size(disk.total)} ({disk_pct}%)"
     except Exception:
-        disk_str = "N/A"
+        host_disk_str = "N/A"
 
     # 24/7 Heartbeat status
     try:
@@ -109,9 +125,10 @@ async def stats_command(_, msg: Message):
         f"💓 **24/7 Heartbeat:** `{heartbeat_str}`\n"
         f"{'─'*28}\n"
         f"🧠 **Bot Process RAM:** `{bot_ram}`\n"
-        f"💻 **VPS System RAM:** `{sys_ram_str}`\n"
+        f"💾 **Bot Project Disk:** `{bot_disk_str}`\n"
+        f"💻 **Host Node RAM:** `{sys_ram_str}`\n"
+        f"🖥️ **Host Node Disk (Shared):** `{host_disk_str}`\n"
         f"⚡ **CPU Usage:** `{cpu_usage}`\n"
-        f"💾 **Disk Storage:** `{disk_str}`\n"
         f"🌐 **Total Bandwidth Streamed:** `{bandwidth_str}` (`{requests_count} hits`)\n"
     )
     await msg.reply(text, quote=True)
