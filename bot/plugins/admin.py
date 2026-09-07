@@ -69,7 +69,7 @@ async def restart_command(_, msg: Message):
     except Exception:
         pass
 
-    # Touch start.sh to notify Alwaysdata supervisor if applicable
+    # Touch start.sh to update timestamp if present
     try:
         if os.path.exists("start.sh"):
             os.utime("start.sh", None)
@@ -232,6 +232,7 @@ async def sync_duration_command(_, msg: Message):
 @verify_admin
 async def revoke_command(_, msg: Message):
     """Revokes an existing file link or batch from MongoDB so it can be re-indexed cleanly."""
+    from bot.config import Server
     from bot.database.files import get_file, delete_file
 
     if len(msg.command) < 2:
@@ -239,9 +240,9 @@ async def revoke_command(_, msg: Message):
             "🗑️ **Revoke / Delete Link Command**\n\n"
             "**Usage:**\n"
             "• `/revoke <file_code>`\n"
-            "• `/revoke https://streamhub69.alwaysdata.net/dl/<file_code>`\n"
-            "• `/revoke https://streamhub69.alwaysdata.net/stream/<file_code>`\n"
-            "• `/revoke https://streamhub69.alwaysdata.net/api/file/<file_code>`\n\n"
+            f"• `/revoke {Server.BASE_URL}/dl/<file_code>`\n"
+            f"• `/revoke {Server.BASE_URL}/stream/<file_code>`\n"
+            f"• `/revoke {Server.BASE_URL}/api/file/<file_code>`\n\n"
             "*(You can also simply click the `[🗑️ Revoke]` button under any link card)*",
             quote=True
         )
@@ -264,4 +265,88 @@ async def revoke_command(_, msg: Message):
         f"✨ The old database record has been cleared. You can now re-generate a fresh link using `/link <channel_post_url>`.",
         quote=True
     )
+
+@TelegramBot.on_message(filters.command(['backup', 'db_dump', 'dump_db']) & filters.private)
+@verify_user
+@verify_admin
+async def backup_database_command(client, msg: Message):
+    """Creates a compressed full JSON backup of the MongoDB database and sends it directly via Telegram DM."""
+    import json
+    import gzip
+    from datetime import datetime
+    from bot.database import db
+    from bot.modules.static import get_human_size
+
+    status = await msg.reply("📦 **Generating database backup...**\nReading collections...", quote=True)
+
+    try:
+        backup_data = {
+            "meta": {
+                "generated_at": datetime.utcnow().isoformat() + "Z",
+                "version": "1.0",
+                "database_name": db.db.name if db.db is not None else "OmniArchiver"
+            },
+            "collections": {}
+        }
+
+        total_records = 0
+        summary_lines = []
+
+        for name, col in (
+            ("movies", db.movies),
+            ("anime", db.anime),
+            ("webseries", db.webseries),
+            ("direct_files", db.direct_files),
+        ):
+            if col is not None:
+                docs = []
+                async for doc in col.find():
+                    doc_copy = {}
+                    for k, v in doc.items():
+                        if isinstance(v, datetime):
+                            doc_copy[k] = v.isoformat()
+                        else:
+                            doc_copy[k] = v
+                    docs.append(doc_copy)
+
+                backup_data["collections"][name] = docs
+                count = len(docs)
+                total_records += count
+                summary_lines.append(f"• **{name.capitalize()}**: `{count}` documents")
+
+        # Serialize to JSON and compress with gzip
+        json_str = json.dumps(backup_data, ensure_ascii=False, indent=2)
+        json_bytes = json_str.encode('utf-8')
+        raw_size = get_human_size(len(json_bytes))
+
+        gz_buf = io.BytesIO()
+        with gzip.GzipFile(fileobj=gz_buf, mode='wb', compresslevel=9) as gz_file:
+            gz_file.write(json_bytes)
+        gz_buf.seek(0)
+        gz_size = get_human_size(len(gz_buf.getvalue()))
+
+        timestamp_str = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        file_name = f"OmniArchiver_Backup_{timestamp_str}.json.gz"
+        gz_buf.name = file_name
+
+        caption = (
+            f"📦 **OmniArchiver MongoDB Backup**\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"📅 **Date:** `{datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}`\n"
+            f"📊 **Total Records:** `{total_records}`\n"
+            + "\n".join(summary_lines) + "\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"💾 **File Size:** `{gz_size}` *(uncompressed: {raw_size})*\n"
+            f"🔒 Keep this backup safe in your Telegram Saved Messages!"
+        )
+
+        await status.delete()
+        await client.send_document(
+            chat_id=msg.chat.id,
+            document=gz_buf,
+            file_name=file_name,
+            caption=caption
+        )
+    except Exception as e:
+        await status.edit_text(f"❌ **Failed to create database backup:** `{e}`")
 

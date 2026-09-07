@@ -21,6 +21,27 @@ async def home():
 async def health_check():
     return "OK", 200
 
+# Malicious vulnerability scanners and abusive scrapers to block immediately
+BLOCKED_AGENTS = (
+    'sqlmap', 'nikto', 'masscan', 'nmap', 'dirbuster', 'gobuster',
+    'zgrab', 'wpscan', 'acunetix', 'nessus', 'havij', 'openvas',
+    'scrapy', 'censys', 'shodan'
+)
+
+@bp.before_request
+async def security_and_bot_check():
+    # Always allow health checks, pings, and home redirect
+    if request.path in ('/ping', '/health', '/'):
+        return None
+
+    user_agent = (request.headers.get('User-Agent') or '').lower()
+
+    # Block automated vulnerability scanners and abusive crawlers
+    if any(blocked in user_agent for blocked in BLOCKED_AGENTS):
+        return jsonify({'status': 'error', 'message': 'Access forbidden'}), 403
+
+    return None
+
 # ==================== STREAM & DOWNLOAD ROUTES ====================
 
 @bp.route('/dl/<string:file_code>')

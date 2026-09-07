@@ -9,9 +9,9 @@
 * [**📝 Variables**](#variables)
 * [**🎮 Commands & Usage**](#commands)
 * [**🕹 Deployment**](#deployment)
-  * [Alwaysdata Deployment](#d-alwaysdata)
-  * [Local Deployment](#d-local)
+  * [Linux / VPS Deployment](#d-vps)
   * [Docker Deployment](#d-docker)
+  * [Local Deployment](#d-local)
 * [**❤️ Credits**](#credits)
 
 ---
@@ -27,6 +27,7 @@
 - **📺 `/batch` Command:** Batch index full Anime or Web Series seasons by specifying start and end message links.
 - **👥 `AUTH_USERS` Permissions:** Multi-admin support allowing designated users full access to manage and index files.
 - **⚡ Hardware Accelerated:** Powered by `tgcrypto` and asynchronous chunk streaming (`Quart`/`Uvicorn`).
+- **📦 1-Click Database Backup:** Instant `/backup` command dumps your entire MongoDB database into a compressed archive sent directly to Telegram DM.
 
 ---
 
@@ -65,11 +66,11 @@ Configure these variables in your `.env` file or hosting environment:
 | `MULTI_BOT_TOKENS` | *Optional* | Additional worker bot tokens (space-separated) for parallel stream acceleration |
 | `OWNER_ID` | **Yes** | Your numeric Telegram user ID (`int`) |
 | `AUTH_USERS` | *Optional* | Space-separated list of Telegram user IDs with full admin rights |
-| `ALLOWED_USER_IDS` | *Optional* | Allowed user IDs (leave empty to allow everyone) |
-| `TELEGRAM_CHANNEL_ID` | **Yes** | Storage Channel ID (with `-100` prefix) for direct files sent in private DMs |
+| `ALLOWED_USER_IDS` | *Optional* | Allowed user IDs for general bot usage (leave empty to allow everyone) |
+| `TELEGRAM_CHANNEL_ID` | *Optional* | Fallback Storage Channel ID (with `-100` prefix). **Only needed if uploading files directly via private DM to the bot**. If you only index existing channels using `/link` or `/batch`, leave this empty! |
 | `DATABASE_URL` | **Yes** | MongoDB connection URI (e.g. `mongodb+srv://...` or `mongodb://localhost:27017`) |
 | `DATABASE_NAME` | *Optional* | Database name in MongoDB (default: `OmniArchiver`) |
-| `BASE_URL` | **Yes** | Public FQDN URL (e.g. `https://<account>.alwaysdata.net`) |
+| `BASE_URL` | **Yes** | Public FQDN URL of your server/domain (e.g. `https://yourdomain.com` or `http://YOUR_VPS_IP:8080`) |
 | `BIND_ADDRESS` | *Optional* | Bind address (default: `0.0.0.0`) |
 | `PORT` | *Optional* | Port to listen on (default: `8080`) |
 
@@ -105,7 +106,13 @@ Index Web Series episodes into the `webseries` collection:
 ---
 
 ### 📊 Other Commands
-- `/stats` - View total indexed movies, anime, series, and active bot workers (Admin only).
+- `/stats` - View live database records, RAM, CPU, worker bots & streaming bandwidth (Admin only).
+- `/backup` - Instant 1-click compressed `.json.gz` database backup sent to your Telegram DM (Admin only).
+- `/clean` - Flush RAM caches & compact memory (Admin only).
+- `/restart` - Smoothly restart the bot process (Admin only).
+- `/sync_duration` - Auto-backfill video durations for existing database records (Admin only).
+- `/revoke <code_or_url>` - Delete a file link from MongoDB so it can be re-indexed cleanly (Admin only).
+- `/sh <cmd>` - Execute a shell terminal command directly from Telegram (Admin only).
 - `/log` - Download bot event log file (Admin only).
 - `/privacy` - View privacy policy.
 - `/help` - View command guide.
@@ -116,51 +123,93 @@ Index Web Series episodes into the `webseries` collection:
 
 ## 🕹 Deployment
 
-<a name="d-alwaysdata"></a>
+<a name="d-vps"></a>
 
-### 🌐 Alwaysdata Deployment
+### 🐧 Linux / Cloud VPS Deployment (Ubuntu / Debian / FreeBSD / Any VPS)
 
-1. **SSH into Alwaysdata:**
-   ```bash
-   ssh <username>@ssh-<username>.alwaysdata.net
-   ```
-2. **Clone & Setup:**
-   ```bash
-   cd ~
-   git clone https://github.com/WorkerOfArea51/OmniArchiver-F2L.git
-   cd OmniArchiver-F2L
-   python3.11 -m venv venv
-   source venv/bin/activate
-   pip install --upgrade pip
-   pip install -r requirements.txt
-   pip cache purge
-   ```
-3. **Create `start.sh`:**
-   ```bash
-   nano start.sh
-   ```
-   Add your environment exports and run: `exec python -m bot`
-   ```bash
-   chmod +x start.sh
-   ```
-4. **Configure Site in Alwaysdata Dashboard:**
-   - **Type:** `User program`
-   - **Command:** `/home/<username>/OmniArchiver-F2L/start.sh`
-   - **Working directory:** `/home/<username>/OmniArchiver-F2L`
-
-<a name="d-local"></a>
-
-### 💻 Local Run
+**1. Clone the repository & set up Python 3.11+ environment:**
 ```bash
-python -m bot
+cd ~
+git clone https://github.com/WorkerOfArea51/OmniArchiver-F2L.git
+cd OmniArchiver-F2L
+python3.11 -m venv venv
+source venv/bin/activate
+pip install --upgrade pip
+pip install -r requirements.txt
 ```
+
+**2. Configure your `.env` file:**
+```bash
+cp .env.example .env
+nano .env
+```
+Fill in your Telegram API credentials, Bot Token, Owner ID, and MongoDB connection string.
+
+**3. Run 24/7 in the Background:**
+
+#### Option A: Systemd Service (Recommended for Ubuntu / Debian)
+Create a service file:
+```bash
+sudo nano /etc/systemd/system/omniarchiver.service
+```
+Paste the configuration (replace `your_user` and path with yours):
+```ini
+[Unit]
+Description=OmniArchiver-F2L Telegram Streaming Bot
+After=network.target
+
+[Service]
+Type=simple
+User=your_user
+WorkingDirectory=/home/your_user/OmniArchiver-F2L
+ExecStart=/home/your_user/OmniArchiver-F2L/venv/bin/python -m bot
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+Enable and start the service:
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable omniarchiver
+sudo systemctl start omniarchiver
+```
+
+#### Option B: Background Run + Self-Healing Crontab Watchdog
+If your hosting does not support `systemd` (e.g. FreeBSD, shared shells, or non-root VPS):
+```bash
+# Start in background
+nohup ./venv/bin/python -m bot > bot.log 2>&1 &
+```
+To ensure it automatically turns back on if the server restarts or reboots, add the included watchdog to your crontab:
+```bash
+chmod +x scripts/watchdog.sh
+crontab -e
+```
+Add this line:
+```cron
+*/5 * * * * /path/to/OmniArchiver-F2L/scripts/watchdog.sh
+```
+
+---
 
 <a name="d-docker"></a>
 
-### 🐳 Docker
+### 🐳 Docker Deployment
 ```bash
 docker build -t omniarchiver-f2l .
-docker run -p 8080:8080 --env-file .env omniarchiver-f2l
+docker run -d --name omniarchiver -p 8080:8080 --env-file .env --restart unless-stopped omniarchiver-f2l
+```
+
+---
+
+<a name="d-local"></a>
+
+### 💻 Local Development
+```bash
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+python -m bot
 ```
 
 ---

@@ -39,6 +39,7 @@ I can generate permanent direct download & high-speed streaming links for files 
 🧹 `/clean` - Flush RAM caches & compact memory.
 💻 `/sh <cmd>` - Execute a terminal shell command.
 🔄 `/restart` - Restart the bot process.
+📦 `/backup` - Download full MongoDB database backup file.
 🧹 `/purge <count>` - Purge messages in chat (or reply with `/purge`).
 """
 
