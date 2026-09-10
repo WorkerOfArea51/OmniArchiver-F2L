@@ -238,11 +238,13 @@ async def revoke_command(_, msg: Message):
     if len(msg.command) < 2:
         return await msg.reply(
             "🗑️ **Revoke / Delete Link Command**\n\n"
-            "**Usage:**\n"
+            "**Usage for Single Files:**\n"
             "• `/revoke <file_code>`\n"
             f"• `/revoke {Server.BASE_URL}/dl/<file_code>`\n"
-            f"• `/revoke {Server.BASE_URL}/stream/<file_code>`\n"
-            f"• `/revoke {Server.BASE_URL}/api/file/<file_code>`\n\n"
+            f"• `/revoke {Server.BASE_URL}/stream/<file_code>`\n\n"
+            "**Usage for Whole Batches (Anime / Series):**\n"
+            "• `/revoke <batch_id>`\n"
+            f"• `/revoke {Server.BASE_URL}/api/batch/<batch_id>`\n\n"
             "*(You can also simply click the `[🗑️ Revoke]` button under any link card)*",
             quote=True
         )
@@ -253,16 +255,25 @@ async def revoke_command(_, msg: Message):
 
     doc = await get_file(code)
     if not doc:
-        return await msg.reply("❌ File link not found in database or was already revoked.", quote=True)
+        return await msg.reply("❌ Record not found in database or was already revoked.", quote=True)
 
     file_title = doc.get('title') or doc.get('file_name', 'N/A')
+    episodes = doc.get('episodes')
     await delete_file(code)
 
+    if episodes is not None:
+        batch_info = f"📦 **Type:** `Entire Batch ({len(episodes)} episodes removed)`\n"
+    elif doc.get('batch_id'):
+        batch_info = "🎬 **Type:** `Single episode removed from batch`\n"
+    else:
+        batch_info = "🎬 **Type:** `Single Movie / Direct File`\n"
+
     await msg.reply(
-        f"🗑️ **Link Revoked Successfully!**\n\n"
+        f"🗑️ **Revoked Successfully!**\n\n"
         f"🎬 **Title:** `{file_title}`\n"
-        f"🔑 **Code:** `{code}`\n\n"
-        f"✨ The old database record has been cleared. You can now re-generate a fresh link using `/link <channel_post_url>`.",
+        f"🔑 **Code / ID:** `{code}`\n"
+        f"{batch_info}\n"
+        f"✨ Database record has been cleared cleanly. You can now re-index anytime!",
         quote=True
     )
 
