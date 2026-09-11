@@ -85,50 +85,53 @@ async def restart_command(_, msg: Message):
 @verify_user
 @verify_admin
 async def purge_command(client, msg: Message):
-    """Purges messages from the chat."""
+    """Purges messages from the chat with fallback for Telegram's 48h limit."""
     if msg.reply_to_message:
         start_id = msg.reply_to_message.id
         end_id = msg.id
         message_ids = list(range(start_id, end_id + 1))
-        
-        # Batch delete messages
-        for i in range(0, len(message_ids), 100):
-            chunk = message_ids[i:i + 100]
-            try:
-                await client.delete_messages(chat_id=msg.chat.id, message_ids=chunk)
-            except Exception:
-                pass
-                
-        status = await client.send_message(
-            chat_id=msg.chat.id,
-            text=f"🧹 **Purged {len(message_ids)} messages successfully!**"
-        )
-        await asyncio.sleep(3)
-        await status.delete()
-
     elif len(msg.command) > 1 and msg.command[1].isdigit():
         count = min(int(msg.command[1]), 100)
         message_ids = list(range(msg.id - count, msg.id + 1))
-        
-        try:
-            await client.delete_messages(chat_id=msg.chat.id, message_ids=message_ids)
-        except Exception:
-            pass
-            
-        status = await client.send_message(
-            chat_id=msg.chat.id,
-            text=f"🧹 **Purged last {count} messages!**"
-        )
-        await asyncio.sleep(3)
-        await status.delete()
-        
     else:
-        await msg.reply(
+        return await msg.reply(
             "🧹 **Purge Usage:**\n"
             "• Reply to a message with `/purge` to delete everything from that message downwards.\n"
-            "• Send `/purge 20` to delete the last 20 messages.",
+            "• Send `/purge 20` to delete the last 20 messages.\n\n"
+            "ℹ️ **Telegram Limitation:** Telegram API strictly forbids bots from deleting user messages older than 48 hours. To wipe older chat history completely, use Telegram's **Clear History** feature.",
             quote=True
         )
+
+    deleted_count = 0
+    # Try batch delete in chunks of 100
+    for i in range(0, len(message_ids), 100):
+        chunk = message_ids[i:i + 100]
+        try:
+            await client.delete_messages(chat_id=msg.chat.id, message_ids=chunk)
+            deleted_count += len(chunk)
+        except Exception:
+            # If batch delete fails (e.g. contains user messages > 48 hours old),
+            # delete individually so bot's own messages still get deleted!
+            for mid in chunk:
+                try:
+                    await client.delete_messages(chat_id=msg.chat.id, message_ids=[mid])
+                    deleted_count += 1
+                except Exception:
+                    pass
+
+    status = await client.send_message(
+        chat_id=msg.chat.id,
+        text=(
+            f"🧹 **Purge Complete!** Deleted `{deleted_count}` messages.\n\n"
+            f"ℹ️ *Note: Telegram does not allow bots to delete user messages older than 48 hours. "
+            f"To delete everything including old messages, use Telegram's **Clear History** option.*"
+        )
+    )
+    await asyncio.sleep(4)
+    try:
+        await status.delete()
+    except Exception:
+        pass
 
 @TelegramBot.on_message(filters.command(['clean', 'gc', 'flush']) & filters.private)
 @verify_user
