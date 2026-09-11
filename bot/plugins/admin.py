@@ -81,7 +81,7 @@ async def restart_command(_, msg: Message):
     # Replace current python process
     os.execl(sys.executable, sys.executable, "-m", "bot")
 
-@TelegramBot.on_message(filters.command(['purge', 'clear']) & filters.private)
+@TelegramBot.on_message(filters.command(['purge', 'clear']) & (filters.private | filters.group))
 @verify_user
 @verify_admin
 async def purge_command(client, msg: Message):
