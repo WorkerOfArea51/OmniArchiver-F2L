@@ -127,6 +127,7 @@ async def transmit_file(file_code):
 
                 yield chunk
                 bytes_streamed += len(chunk)
+                del chunk
                 chunk_index += 1
         except (asyncio.CancelledError, GeneratorExit):
             pass
