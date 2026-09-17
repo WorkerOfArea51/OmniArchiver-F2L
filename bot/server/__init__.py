@@ -7,6 +7,7 @@ from . import main, error
 logger = getLogger('uvicorn')
 instance = Quart(__name__)
 instance.config['RESPONSE_TIMEOUT'] = None
+instance.config['BODY_TIMEOUT'] = 300
 instance.config['MAX_CONTENT_LENGTH'] = 999999999999999
 
 @instance.before_serving
@@ -21,11 +22,13 @@ instance.register_error_handler(404, error.not_found)
 instance.register_error_handler(405, error.invalid_method)
 instance.register_error_handler(error.HTTPError, error.http_error)
 
-server = UvicornServer (
-    Config (
+server = UvicornServer(
+    Config(
         app=instance,
         host=Server.BIND_ADDRESS,
         port=Server.PORT,
+        timeout_keep_alive=300,
+        timeout_notify=120,
         log_config=LOGGER_CONFIG_JSON
     )
 )

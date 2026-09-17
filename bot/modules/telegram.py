@@ -1,13 +1,31 @@
+import time
+from collections import OrderedDict
 from hydrogram import Client
 from hydrogram.types import Message
 from datetime import datetime
 from mimetypes import guess_type
 from bot.clients import TelegramBot, get_worker_client
 
+# Fast in-memory LRU cache for channel file messages (eliminates Telegram round-trips on seek/range requests)
+_MESSAGE_CACHE: OrderedDict[tuple, tuple[Message, float]] = OrderedDict()
+_CACHE_MAX_SIZE = 500
+_CACHE_TTL = 3600  # 1 hour
+
 async def get_message(chat_id: int | str, message_id: int, client: Client = None) -> Message | None:
+    cache_key = (chat_id, message_id)
+    now = time.time()
+
+    if cache_key in _MESSAGE_CACHE:
+        cached_msg, ts = _MESSAGE_CACHE[cache_key]
+        if now - ts < _CACHE_TTL:
+            _MESSAGE_CACHE.move_to_end(cache_key)
+            return cached_msg
+        else:
+            _MESSAGE_CACHE.pop(cache_key, None)
+
     message = None
     target_client = client or get_worker_client() or TelegramBot
-    
+
     try:
         message = await target_client.get_messages(chat_id=chat_id, message_ids=message_id)
         if message and message.empty:
@@ -21,6 +39,11 @@ async def get_message(chat_id: int | str, message_id: int, client: Client = None
                     message = None
             except Exception:
                 message = None
+
+    if message:
+        if len(_MESSAGE_CACHE) >= _CACHE_MAX_SIZE:
+            _MESSAGE_CACHE.popitem(last=False)
+        _MESSAGE_CACHE[cache_key] = (message, now)
 
     return message
 

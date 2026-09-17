@@ -108,7 +108,8 @@ async def transmit_file(file_code):
 
         try:
             chunk_index = 0
-            async for chunk in TelegramBot.stream_media(
+            worker = get_worker_client() or TelegramBot
+            async for chunk in worker.stream_media(
                 file_msg,
                 offset=offset,
                 limit=chunks_needed,
