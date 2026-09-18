@@ -11,11 +11,13 @@ _MESSAGE_CACHE: OrderedDict[tuple, tuple[Message, float]] = OrderedDict()
 _CACHE_MAX_SIZE = 500
 _CACHE_TTL = 3600  # 1 hour
 
-async def get_message(chat_id: int | str, message_id: int, client: Client = None) -> Message | None:
-    cache_key = (chat_id, message_id)
+async def get_message(chat_id: int | str, message_id: int, client: Client = None, force_refresh: bool = False) -> Message | None:
+    target_client = client or get_worker_client() or TelegramBot
+    client_name = getattr(target_client, 'name', 'bot')
+    cache_key = (client_name, chat_id, message_id)
     now = time.time()
 
-    if cache_key in _MESSAGE_CACHE:
+    if not force_refresh and cache_key in _MESSAGE_CACHE:
         cached_msg, ts = _MESSAGE_CACHE[cache_key]
         if now - ts < _CACHE_TTL:
             _MESSAGE_CACHE.move_to_end(cache_key)
@@ -24,21 +26,25 @@ async def get_message(chat_id: int | str, message_id: int, client: Client = None
             _MESSAGE_CACHE.pop(cache_key, None)
 
     message = None
-    target_client = client or get_worker_client() or TelegramBot
 
     try:
         message = await target_client.get_messages(chat_id=chat_id, message_ids=message_id)
         if message and message.empty:
             message = None
     except Exception:
-        # Fallback to main TelegramBot if worker client fails
-        if target_client != TelegramBot:
+        # Fallback to main TelegramBot only if no specific client was requested
+        if client is None and target_client != TelegramBot:
             try:
+                target_client = TelegramBot
+                client_name = getattr(target_client, 'name', 'bot')
+                cache_key = (client_name, chat_id, message_id)
                 message = await TelegramBot.get_messages(chat_id=chat_id, message_ids=message_id)
                 if message and message.empty:
                     message = None
             except Exception:
                 message = None
+        else:
+            message = None
 
     if message:
         if len(_MESSAGE_CACHE) >= _CACHE_MAX_SIZE:

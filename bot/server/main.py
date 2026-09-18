@@ -54,10 +54,16 @@ async def transmit_file(file_code):
     channel_id = doc.get('channel_id')
     message_id = doc.get('message_id')
 
-    # Get message with TelegramBot (guaranteed channel admin) or worker
-    file_msg = await get_message(channel_id, message_id, client=TelegramBot)
-    if not file_msg:
-        file_msg = await get_message(channel_id, message_id, client=get_worker_client())
+    # Select worker client for this streaming request
+    worker = get_worker_client() or TelegramBot
+
+    # Retrieve message with this specific worker so the file_reference is cryptographically bound to it
+    file_msg = await get_message(channel_id, message_id, client=worker)
+    if not file_msg and worker != TelegramBot:
+        # Fallback to main TelegramBot if worker is not an admin/member in the channel
+        file_msg = await get_message(channel_id, message_id, client=TelegramBot)
+        worker = TelegramBot
+
     if not file_msg:
         abort(404, 'Media message not found in channel.')
 
@@ -108,7 +114,6 @@ async def transmit_file(file_code):
 
         try:
             chunk_index = 0
-            worker = get_worker_client() or TelegramBot
             async for chunk in worker.stream_media(
                 file_msg,
                 offset=offset,
@@ -133,7 +138,36 @@ async def transmit_file(file_code):
         except (asyncio.CancelledError, GeneratorExit):
             pass
         except Exception as e:
-            logger.warning("Stream error on TelegramBot: %s", e)
+            logger.warning("Stream error on worker %s: %s", getattr(worker, 'name', 'bot'), e)
+            # Automatic fallback to primary TelegramBot if worker fails on initial chunk
+            if worker != TelegramBot and bytes_streamed == 0:
+                try:
+                    fallback_msg = await get_message(channel_id, message_id, client=TelegramBot, force_refresh=True)
+                    if fallback_msg:
+                        chunk_index = 0
+                        async for chunk in TelegramBot.stream_media(
+                            fallback_msg,
+                            offset=offset,
+                            limit=chunks_needed,
+                        ):
+                            if chunk_index == 0:
+                                trim_start = current_start % chunk_size
+                                if trim_start > 0:
+                                    chunk = chunk[trim_start:]
+
+                            remaining_bytes = content_length - bytes_streamed
+                            if remaining_bytes <= 0:
+                                break
+
+                            if len(chunk) > remaining_bytes:
+                                chunk = chunk[:remaining_bytes]
+
+                            yield chunk
+                            bytes_streamed += len(chunk)
+                            del chunk
+                            chunk_index += 1
+                except Exception as fb_err:
+                    logger.warning("Fallback stream error on TelegramBot: %s", fb_err)
         finally:
             if bytes_streamed > 0:
                 await add_bandwidth_bytes(bytes_streamed)
