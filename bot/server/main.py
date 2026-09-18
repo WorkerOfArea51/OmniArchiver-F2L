@@ -138,10 +138,11 @@ async def transmit_file(file_code):
         except (asyncio.CancelledError, GeneratorExit):
             pass
         except Exception as e:
-            logger.warning("Stream error on worker %s: %s", getattr(worker, 'name', 'bot'), e)
-            # Automatic fallback to primary TelegramBot if worker fails on initial chunk
-            if worker != TelegramBot and bytes_streamed == 0:
+            # If initial chunk failed (e.g. FileReferenceExpired, invalid token, or worker issue),
+            # force-refresh a fresh message directly from Telegram via TelegramBot and retry
+            if bytes_streamed == 0:
                 try:
+                    logger.info("Attempting automatic fresh-token retry for msg %s via TelegramBot...", message_id)
                     fallback_msg = await get_message(channel_id, message_id, client=TelegramBot, force_refresh=True)
                     if fallback_msg:
                         chunk_index = 0
