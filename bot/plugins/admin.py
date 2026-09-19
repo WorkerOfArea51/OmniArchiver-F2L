@@ -81,57 +81,122 @@ async def restart_command(_, msg: Message):
     # Replace current python process
     os.execl(sys.executable, sys.executable, "-m", "bot")
 
+try:
+    from hydrogram.errors import FloodWait
+except ImportError:
+    try:
+        from pyrogram.errors import FloodWait
+    except ImportError:
+        FloodWait = Exception
+
 @TelegramBot.on_message(filters.command(['purge', 'clear']) & (filters.private | filters.group))
 @verify_user
 @verify_admin
 async def purge_command(client, msg: Message):
-    """Purges messages from the chat with fallback for Telegram's 48h limit."""
+    """
+    Ultimate Unified Purge Engine:
+    - Dual Trigger: Reply to a message with /purge OR specify a count (e.g. /purge 20).
+    - Bi-directional Safety: Uses min() and max() so range is never inverted.
+    - Works in both Private chats and Groups.
+    - Paced 100-chunk batching with 1s delay to prevent Telegram flood penalties.
+    - FloodWait auto-pause and resume.
+    - Telegram 48h limit fallback: if bulk delete fails, deletes bot's own messages individually.
+    - 100% Self-Cleaning: Cleans up command message, status alert, and confirmation.
+    """
     if msg.reply_to_message:
         start_id = msg.reply_to_message.id
         end_id = msg.id
-        message_ids = list(range(start_id, end_id + 1))
+        min_id = min(start_id, end_id)
+        max_id = max(start_id, end_id)
+        message_ids = list(range(min_id, max_id + 1))
     elif len(msg.command) > 1 and msg.command[1].isdigit():
-        count = min(int(msg.command[1]), 100)
+        count = min(int(msg.command[1]), 1000)
         message_ids = list(range(msg.id - count, msg.id + 1))
     else:
-        return await msg.reply(
+        usage = await msg.reply(
             "🧹 **Purge Usage:**\n"
             "• Reply to a message with `/purge` to delete everything from that message downwards.\n"
             "• Send `/purge 20` to delete the last 20 messages.\n\n"
             "ℹ️ **Telegram Limitation:** Telegram API strictly forbids bots from deleting user messages older than 48 hours. To wipe older chat history completely, use Telegram's **Clear History** feature.",
             quote=True
         )
-
-    deleted_count = 0
-    # Try batch delete in chunks of 100
-    for i in range(0, len(message_ids), 100):
-        chunk = message_ids[i:i + 100]
+        await asyncio.sleep(6)
         try:
-            await client.delete_messages(chat_id=msg.chat.id, message_ids=chunk)
-            deleted_count += len(chunk)
+            await usage.delete()
+            await msg.delete()
         except Exception:
-            # If batch delete fails (e.g. contains user messages > 48 hours old),
-            # delete individually so bot's own messages still get deleted!
-            for mid in chunk:
-                try:
-                    await client.delete_messages(chat_id=msg.chat.id, message_ids=[mid])
-                    deleted_count += 1
-                except Exception:
-                    pass
+            pass
+        return
 
     status = await client.send_message(
         chat_id=msg.chat.id,
-        text=(
-            f"🧹 **Purge Complete!** Deleted `{deleted_count}` messages.\n\n"
-            f"ℹ️ *Note: Telegram does not allow bots to delete user messages older than 48 hours. "
-            f"To delete everything including old messages, use Telegram's **Clear History** option.*"
-        )
+        text="🌪️ **Purging messages...**"
     )
-    await asyncio.sleep(4)
+    deleted_count = 0
+
+    # Try batch delete in chunks of 100 (Telegram API maximum)
+    chunks = [message_ids[i:i + 100] for i in range(0, len(message_ids), 100)]
+
     try:
-        await status.delete()
-    except Exception:
-        pass
+        for chunk in chunks:
+            try:
+                await client.delete_messages(chat_id=msg.chat.id, message_ids=chunk)
+                deleted_count += len(chunk)
+                await asyncio.sleep(1)  # Rate-limit pacing between chunks
+            except FloodWait as e:
+                await asyncio.sleep(e.value + 1)
+                try:
+                    await client.delete_messages(chat_id=msg.chat.id, message_ids=chunk)
+                    deleted_count += len(chunk)
+                except Exception:
+                    pass
+            except Exception:
+                # If batch delete fails (e.g. contains user messages > 48 hours old),
+                # delete individually so bot's own messages still get deleted!
+                for mid in chunk:
+                    try:
+                        await client.delete_messages(chat_id=msg.chat.id, message_ids=[mid])
+                        deleted_count += 1
+                    except FloodWait as fw:
+                        await asyncio.sleep(fw.value + 1)
+                        try:
+                            await client.delete_messages(chat_id=msg.chat.id, message_ids=[mid])
+                            deleted_count += 1
+                        except Exception:
+                            pass
+                    except Exception:
+                        pass
+
+        confirm = await client.send_message(
+            chat_id=msg.chat.id,
+            text=(
+                f"🧹 **Purge Complete!** Deleted `{deleted_count}` messages.\n\n"
+                f"ℹ️ *Note: Telegram does not allow bots to delete user messages older than 48 hours. "
+                f"To delete everything including old messages, use Telegram's **Clear History** option.*"
+            )
+        )
+        try:
+            await status.delete()
+        except Exception:
+            pass
+
+        # Also clean up the original command message
+        try:
+            await msg.delete()
+        except Exception:
+            pass
+
+        await asyncio.sleep(3)
+        try:
+            await confirm.delete()
+        except Exception:
+            pass
+
+    except Exception as e:
+        try:
+            await status.edit_text(f"⚠️ **Error during purge:** `{e}`")
+        except Exception:
+            pass
 
 @TelegramBot.on_message(filters.command(['clean', 'gc', 'flush']) & filters.private)
 @verify_user
