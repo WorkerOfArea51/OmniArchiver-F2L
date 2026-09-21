@@ -95,9 +95,21 @@ async def transmit_file(file_code):
 
     total_bytes_to_stream = end - start + 1
     content_length = total_bytes_to_stream
+    # Ensure a valid video MIME type so browsers stream inline instead of forcing a download
+    if not mime_type or mime_type == 'application/octet-stream':
+        if file_name and file_name.lower().endswith('.mkv'):
+            mime_type = 'video/x-matroska'
+        elif file_name and file_name.lower().endswith('.webm'):
+            mime_type = 'video/webm'
+        else:
+            mime_type = 'video/mp4'
+
+    # Use 'inline' by default for web video streaming; use 'attachment' only when ?dl=1 is requested
+    disposition = 'attachment' if (request.args.get('dl') or request.args.get('download')) else 'inline'
+
     headers = {
-        'Content-Type': mime_type or 'application/octet-stream',
-        'Content-Disposition': f'attachment; filename="{file_name}"',
+        'Content-Type': mime_type,
+        'Content-Disposition': f'{disposition}; filename="{file_name}"',
         'Content-Range': f'bytes {start}-{end}/{file_size}',
         'Accept-Ranges': 'bytes',
         'Content-Length': str(content_length),

@@ -336,8 +336,7 @@
 
   <!-- Main Video Player -->
   <div class="player-wrapper">
-    <video id="stream-media" playsinline controls preload="auto">
-      <source src="{{ mediaLink }}" type="video/mp4">
+    <video id="stream-media" playsinline controls preload="metadata" src="{{ mediaLink }}">
       Your browser does not support HTML5 video streaming.
     </video>
 
@@ -369,7 +368,7 @@
       </button>
 
       <!-- Direct Download -->
-      <a href="{{ mediaLink }}" class="btn btn-download" download title="Download full media file">
+      <a href="{{ mediaLink }}?dl=1" class="btn btn-download" download title="Download full media file">
         <i class="fas fa-download"></i> Download
       </a>
     </div>
