@@ -39,3 +39,7 @@ event-log.txt
 
 # Environment variables
 .env
+
+# Local AI Memory & Scratch
+GEMINI.md
+
