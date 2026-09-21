@@ -429,3 +429,95 @@ async def backup_database_command(client, msg: Message):
     except Exception as e:
         await status.edit_text(f"❌ **Failed to create database backup:** `{e}`")
 
+@TelegramBot.on_message(filters.command(['restore', 'db_restore', 'import_db']) & filters.private)
+@verify_user
+@verify_admin
+async def restore_database_command(client, msg: Message):
+    """Restores the MongoDB database from a .json.gz or .json backup file sent as a reply."""
+    import json
+    import gzip
+    from datetime import datetime
+    from bot.database import db
+
+    if not msg.reply_to_message or not msg.reply_to_message.document:
+        return await msg.reply(
+            "📥 **Database Restore Usage:**\n\n"
+            "Reply to any backup file (`.json.gz` or `.json`) with `/restore` to import all records into MongoDB.\n\n"
+            "⚠️ *Warning: Existing records with the same `_id` will be updated with the backup version.*",
+            quote=True
+        )
+
+    doc = msg.reply_to_message.document
+    f_name = doc.file_name or ""
+    if not (f_name.endswith('.json.gz') or f_name.endswith('.json') or f_name.endswith('.gz')):
+        return await msg.reply("❌ The replied file must be a `.json.gz` or `.json` database backup file!", quote=True)
+
+    status = await msg.reply("⏳ **Downloading and verifying backup file...**", quote=True)
+
+    try:
+        # Download document into memory
+        file_obj = await client.download_media(doc, in_memory=True)
+        raw_bytes = file_obj.getvalue() if hasattr(file_obj, 'getvalue') else bytes(file_obj)
+
+        await status.edit_text("⏳ **Decompressing and parsing backup data...**")
+
+        # Decompress if gzipped
+        if f_name.endswith('.gz') or raw_bytes[:2] == b'\x1f\x8b':
+            json_bytes = gzip.decompress(raw_bytes)
+        else:
+            json_bytes = raw_bytes
+
+        backup_data = json.loads(json_bytes.decode('utf-8'))
+        collections_data = backup_data.get("collections", {})
+
+        if not collections_data:
+            return await status.edit_text("❌ Invalid backup file: No collections found inside!")
+
+        await status.edit_text("⏳ **Restoring database records into MongoDB...**")
+
+        total_restored = 0
+        summary_lines = []
+
+        col_mapping = {
+            "movies": db.movies,
+            "anime": db.anime,
+            "webseries": db.webseries,
+            "direct_files": db.direct_files,
+        }
+
+        for name, col in col_mapping.items():
+            if col is not None and name in collections_data:
+                docs = collections_data[name]
+                restored_col_count = 0
+                for d in docs:
+                    # Restore ISO format dates back to datetime objects if needed
+                    for k, v in list(d.items()):
+                        if isinstance(v, str) and ('T' in v and (v.endswith('Z') or '+' in v)):
+                            try:
+                                d[k] = datetime.fromisoformat(v.replace('Z', '+00:00'))
+                            except Exception:
+                                pass
+
+                    doc_id = d.get('_id')
+                    if doc_id:
+                        await col.replace_one({'_id': doc_id}, d, upsert=True)
+                        restored_col_count += 1
+
+                total_restored += restored_col_count
+                summary_lines.append(f"• **{name.capitalize()}**: `{restored_col_count}` documents")
+
+        meta = backup_data.get("meta", {})
+        gen_time = meta.get("generated_at", "Unknown")
+
+        await status.edit_text(
+            f"✅ **Database Restore Complete!**\n\n"
+            f"📅 **Backup Created At:** `{gen_time}`\n"
+            f"📊 **Total Restored:** `{total_restored}` records\n"
+            + "\n".join(summary_lines) + "\n\n"
+            f"✨ All records have been safely synced to MongoDB!"
+        )
+
+    except Exception as e:
+        await status.edit_text(f"❌ **Failed to restore backup:** `{e}`")
+
+

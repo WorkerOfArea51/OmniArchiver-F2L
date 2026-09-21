@@ -37,7 +37,7 @@ async def handle_user_file(_, msg: Message):
     try:
         # Copy to default storage / bin channel
         forwarded = await msg.copy(chat_id=Telegram.CHANNEL_ID)
-        file_name, file_size, mime_type = get_file_properties(forwarded)
+        file_name, file_size, mime_type, duration, duration_formatted = get_file_properties(forwarded)
         
         # Save into MongoDB 'direct_files' collection
         doc = await save_file(
@@ -46,8 +46,10 @@ async def handle_user_file(_, msg: Message):
             file_name=file_name,
             file_size=file_size,
             mime_type=mime_type,
-            user_id=sender_id,
-            category='direct_files'
+            user_id=msg.from_user.id,
+            category='direct_files',
+            duration=duration,
+            duration_formatted=duration_formatted
         )
         
         code = doc['code']

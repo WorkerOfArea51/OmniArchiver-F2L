@@ -183,7 +183,20 @@ async def stream_file(file_code):
         abort(404, 'File not found or link has expired.')
 
     media_url = f'{Server.BASE_URL}/dl/{file_code}'
-    return await render_template('player.html', mediaLink=media_url, fileName=doc.get('file_name', 'Play Video'))
+    file_name = doc.get('file_name', 'Play Video')
+    file_size_str = get_human_size(doc.get('file_size', 0))
+    duration_str = doc.get('duration_formatted', '')
+    bot_username = Telegram.BOT_USERNAME or ''
+
+    return await render_template(
+        'player.html',
+        mediaLink=media_url,
+        fileName=file_name,
+        fileSize=file_size_str,
+        duration=duration_str,
+        fileCode=file_code,
+        botUsername=bot_username
+    )
 
 # ==================== REST API ENDPOINTS FOR STREAMHUB ====================
 
