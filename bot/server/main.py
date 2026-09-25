@@ -1,3 +1,5 @@
+import asyncio
+from logging import getLogger
 from quart import Blueprint, Response, request, render_template, redirect, jsonify
 from math import ceil
 from re import match as re_match
@@ -9,6 +11,8 @@ from bot.database.files import get_file, add_bandwidth_bytes
 from bot.modules.telegram import get_message, get_file_properties
 from bot.modules.static import get_human_size
 from bot.modules.memory import flush_ram
+
+logger = getLogger('server')
 
 bp = Blueprint('main', __name__)
 
@@ -124,29 +128,68 @@ async def transmit_file(file_code):
         remaining_total = end - current_start + 1
         chunks_needed = ceil(remaining_total / chunk_size)
 
+        _SENTINEL = object()
+
+        async def stream_with_client(target_client, target_msg):
+            nonlocal bytes_streamed
+            # Buffer up to 2 chunks (2 MB) in RAM while current chunk is streaming to client
+            queue = asyncio.Queue(maxsize=2)
+            producer_err = []
+
+            async def producer():
+                try:
+                    async for chunk in target_client.stream_media(
+                        target_msg,
+                        offset=offset,
+                        limit=chunks_needed,
+                    ):
+                        await queue.put(chunk)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    producer_err.append(e)
+                finally:
+                    await queue.put(_SENTINEL)
+
+            producer_task = asyncio.create_task(producer())
+            try:
+                chunk_index = 0
+                while True:
+                    item = await queue.get()
+                    if item is _SENTINEL:
+                        if producer_err and bytes_streamed == 0:
+                            raise producer_err[0]
+                        break
+
+                    chunk = item
+                    if chunk_index == 0:
+                        trim_start = current_start % chunk_size
+                        if trim_start > 0:
+                            chunk = chunk[trim_start:]
+
+                    remaining_bytes = content_length - bytes_streamed
+                    if remaining_bytes <= 0:
+                        break
+
+                    if len(chunk) > remaining_bytes:
+                        chunk = chunk[:remaining_bytes]
+
+                    yield chunk
+                    bytes_streamed += len(chunk)
+                    del chunk
+                    del item
+                    chunk_index += 1
+            finally:
+                if not producer_task.done():
+                    producer_task.cancel()
+                    try:
+                        await producer_task
+                    except (asyncio.CancelledError, Exception):
+                        pass
+
         try:
-            chunk_index = 0
-            async for chunk in worker.stream_media(
-                file_msg,
-                offset=offset,
-                limit=chunks_needed,
-            ):
-                if chunk_index == 0:
-                    trim_start = current_start % chunk_size
-                    if trim_start > 0:
-                        chunk = chunk[trim_start:]
-
-                remaining_bytes = content_length - bytes_streamed
-                if remaining_bytes <= 0:
-                    break
-
-                if len(chunk) > remaining_bytes:
-                    chunk = chunk[:remaining_bytes]
-
-                yield chunk
-                bytes_streamed += len(chunk)
-                del chunk
-                chunk_index += 1
+            async for data in stream_with_client(worker, file_msg):
+                yield data
         except (asyncio.CancelledError, GeneratorExit):
             pass
         except Exception as e:
@@ -157,28 +200,10 @@ async def transmit_file(file_code):
                     logger.info("Attempting automatic fresh-token retry for msg %s via TelegramBot...", message_id)
                     fallback_msg = await get_message(channel_id, message_id, client=TelegramBot, force_refresh=True)
                     if fallback_msg:
-                        chunk_index = 0
-                        async for chunk in TelegramBot.stream_media(
-                            fallback_msg,
-                            offset=offset,
-                            limit=chunks_needed,
-                        ):
-                            if chunk_index == 0:
-                                trim_start = current_start % chunk_size
-                                if trim_start > 0:
-                                    chunk = chunk[trim_start:]
-
-                            remaining_bytes = content_length - bytes_streamed
-                            if remaining_bytes <= 0:
-                                break
-
-                            if len(chunk) > remaining_bytes:
-                                chunk = chunk[:remaining_bytes]
-
-                            yield chunk
-                            bytes_streamed += len(chunk)
-                            del chunk
-                            chunk_index += 1
+                        async for data in stream_with_client(TelegramBot, fallback_msg):
+                            yield data
+                except (asyncio.CancelledError, GeneratorExit):
+                    pass
                 except Exception as fb_err:
                     logger.warning("Fallback stream error on TelegramBot: %s", fb_err)
         finally:
