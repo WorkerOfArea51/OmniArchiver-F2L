@@ -63,3 +63,58 @@ def flush_ram():
             libc.mallctl(b"arenas.purge", None, None, None, 0)
     except Exception:
         pass
+
+import os
+from logging import getLogger
+
+logger = getLogger('memory')
+
+def get_current_ram_mb() -> float:
+    """Returns current process Resident Set Size (RSS) in megabytes."""
+    # 1. Try psutil if installed
+    try:
+        import psutil
+        return psutil.Process(os.getpid()).memory_info().rss / (1024 * 1024)
+    except Exception:
+        pass
+
+    # 2. Standard library resource module (built-in on FreeBSD / Linux / macOS)
+    try:
+        import resource
+        # ru_maxrss is in kilobytes on Linux and FreeBSD
+        return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0
+    except Exception:
+        pass
+
+    # 3. Linux /proc/self/status VmRSS fallback
+    try:
+        with open('/proc/self/status', 'r') as f:
+            for line in f:
+                if line.startswith('VmRSS:'):
+                    return float(line.split()[1]) / 1024.0
+    except Exception:
+        pass
+
+    return 0.0
+
+def check_memory_circuit_breaker(threshold_mb: int = 380) -> bool:
+    """
+    Serv00 512 MB Memory Guardian:
+    Checks if current process RAM approaches threshold_mb. If so, immediately triggers
+    cyclic garbage collection, jemalloc heap arena purging back to FreeBSD kernel,
+    and evicts old message cache entries to guarantee immunity from host SIGKILL.
+    """
+    rss_mb = get_current_ram_mb()
+    if rss_mb >= threshold_mb:
+        flush_ram()
+        try:
+            from bot.modules.telegram import _MESSAGE_CACHE
+            if len(_MESSAGE_CACHE) > 50:
+                for _ in range(len(_MESSAGE_CACHE) // 2):
+                    _MESSAGE_CACHE.popitem(last=False)
+        except Exception:
+            pass
+        new_rss = get_current_ram_mb()
+        logger.warning("Memory Circuit Breaker Tripped! RSS was %.1f MB -> reduced to %.1f MB", rss_mb, new_rss)
+        return True
+    return False

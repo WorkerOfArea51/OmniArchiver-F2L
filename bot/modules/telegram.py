@@ -4,7 +4,15 @@ from hydrogram import Client
 from hydrogram.types import Message
 from datetime import datetime
 from mimetypes import guess_type
-from bot.clients import TelegramBot, get_worker_client
+from bot.clients import TelegramBot, get_worker_client, mark_worker_cooldown
+
+try:
+    from hydrogram.errors import FloodWait
+except ImportError:
+    try:
+        from pyrogram.errors import FloodWait
+    except ImportError:
+        FloodWait = Exception
 
 # Fast in-memory LRU cache for channel file messages (eliminates Telegram round-trips on seek/range requests)
 _MESSAGE_CACHE: OrderedDict[tuple, tuple[Message, float]] = OrderedDict()
@@ -31,7 +39,9 @@ async def get_message(chat_id: int | str, message_id: int, client: Client = None
         message = await target_client.get_messages(chat_id=chat_id, message_ids=message_id)
         if message and message.empty:
             message = None
-    except Exception:
+    except Exception as e:
+        if isinstance(e, FloodWait):
+            mark_worker_cooldown(client_name, getattr(e, 'value', 30))
         # Fallback to main TelegramBot only if no specific client was requested
         if client is None and target_client != TelegramBot:
             try:

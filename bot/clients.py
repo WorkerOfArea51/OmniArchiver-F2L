@@ -59,13 +59,42 @@ def init_worker_clients():
     _worker_cycler = cycle(worker_clients)
     logger.info("Initialized %d bot client(s) in worker pool.", len(worker_clients))
 
+_worker_cooldowns: dict[str, float] = {}
+
+def mark_worker_cooldown(worker_name: str, duration: float):
+    """Temporarily marks a worker bot on cooldown if rate-limited by Telegram."""
+    import time
+    _worker_cooldowns[worker_name] = time.time() + duration
+    logger.warning("Worker %s placed on cooldown for %.1fs due to Telegram rate-limiting.", worker_name, duration)
+
 def get_worker_client() -> Client:
+    """Returns the next healthy worker client from the pool, skipping any currently on cooldown."""
     global _worker_cycler
     if not worker_clients:
         return TelegramBot
+
+    import time
+    now = time.time()
+    # Filter healthy clients (cooldown expired or not set)
+    healthy_workers = [
+        w for w in worker_clients
+        if now >= _worker_cooldowns.get(getattr(w, 'name', ''), 0)
+    ]
+
+    # If all auxiliary workers are on cooldown, fall back to TelegramBot
+    if not healthy_workers:
+        return TelegramBot
+
+    # Cycle among currently healthy workers
     if _worker_cycler is None:
         _worker_cycler = cycle(worker_clients)
-    return next(_worker_cycler)
+
+    for _ in range(len(worker_clients)):
+        candidate = next(_worker_cycler)
+        if candidate in healthy_workers:
+            return candidate
+
+    return healthy_workers[0]
 
 async def start_all_clients():
     import os

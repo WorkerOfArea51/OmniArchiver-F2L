@@ -4,13 +4,21 @@ from quart import Blueprint, Response, request, render_template, redirect, jsoni
 from math import ceil
 from re import match as re_match
 from .error import abort
-from bot.clients import get_worker_client, TelegramBot
+from bot.clients import get_worker_client, TelegramBot, mark_worker_cooldown
 from bot.config import Telegram, Server
 from bot.database import db
 from bot.database.files import get_file, add_bandwidth_bytes
 from bot.modules.telegram import get_message, get_file_properties
 from bot.modules.static import get_human_size
-from bot.modules.memory import flush_ram
+from bot.modules.memory import flush_ram, check_memory_circuit_breaker
+
+try:
+    from hydrogram.errors import FloodWait
+except ImportError:
+    try:
+        from pyrogram.errors import FloodWait
+    except ImportError:
+        FloodWait = Exception
 
 logger = getLogger('server')
 
@@ -114,11 +122,16 @@ async def transmit_file(file_code):
     headers = {
         'Content-Type': mime_type,
         'Content-Disposition': f'{disposition}; filename="{file_name}"',
-        'Content-Range': f'bytes {start}-{end}/{file_size}',
         'Accept-Ranges': 'bytes',
         'Content-Length': str(content_length),
+        'Connection': 'keep-alive',
+        'Keep-Alive': 'timeout=300, max=1000',
         'Access-Control-Allow-Origin': '*',
+        'Access-Control-Expose-Headers': 'Content-Range, Accept-Ranges, Content-Length',
+        'X-Content-Type-Options': 'nosniff',
     }
+    if range_header:
+        headers['Content-Range'] = f'bytes {start}-{end}/{file_size}'
     status_code = 206 if range_header else 200
 
     async def file_stream():
@@ -147,6 +160,11 @@ async def transmit_file(file_code):
                 except asyncio.CancelledError:
                     raise
                 except Exception as e:
+                    if isinstance(e, FloodWait):
+                        wait_sec = getattr(e, 'value', 30)
+                        worker_name = getattr(target_client, 'name', 'bot')
+                        mark_worker_cooldown(worker_name, wait_sec)
+                        logger.warning("Worker %s hit FloodWait (%ds) during stream production, marked on cooldown", worker_name, wait_sec)
                     producer_err.append(e)
                 finally:
                     await queue.put(_SENTINEL)
@@ -179,6 +197,9 @@ async def transmit_file(file_code):
                     del chunk
                     del item
                     chunk_index += 1
+                    # Memory guardian: check RSS every 20 chunks (~20 MB streamed)
+                    if chunk_index % 20 == 0:
+                        check_memory_circuit_breaker()
             finally:
                 if not producer_task.done():
                     producer_task.cancel()
@@ -193,7 +214,13 @@ async def transmit_file(file_code):
         except (asyncio.CancelledError, GeneratorExit):
             pass
         except Exception as e:
-            # If initial chunk failed (e.g. FileReferenceExpired, invalid token, or worker issue),
+            if isinstance(e, FloodWait):
+                wait_sec = getattr(e, 'value', 30)
+                worker_name = getattr(worker, 'name', 'bot')
+                mark_worker_cooldown(worker_name, wait_sec)
+                logger.warning("Worker %s hit FloodWait (%ds), marked on cooldown", worker_name, wait_sec)
+
+            # If initial chunk failed (e.g. FileReferenceExpired, FloodWait, invalid token, or worker issue),
             # force-refresh a fresh message directly from Telegram via TelegramBot and retry
             if bytes_streamed == 0:
                 try:
@@ -209,6 +236,7 @@ async def transmit_file(file_code):
         finally:
             if bytes_streamed > 0:
                 await add_bandwidth_bytes(bytes_streamed)
+            check_memory_circuit_breaker()
             flush_ram()
 
     return Response(file_stream(), headers=headers, status=status_code)
