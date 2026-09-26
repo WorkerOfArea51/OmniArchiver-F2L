@@ -4,6 +4,7 @@ from hydrogram.types import Message
 from bot.clients import TelegramBot
 from bot.database.files import search_records
 from bot.modules.decorators import verify_user
+from bot.modules.static import get_human_size
 
 @TelegramBot.on_message(filters.command(['search', 'find']) & filters.private)
 @verify_user
@@ -44,7 +45,7 @@ async def search_command(_, msg: Message):
         if item['type'] == 'movie':
             title = item.get('title') or item.get('file_name')
             dur = item.get('duration_formatted', 'N/A')
-            size = item.get('size_formatted', '0 B')
+            size = item.get('size_formatted') or get_human_size(item.get('file_size', 0))
             stream_url = item['stream_url']
             download_url = item['download_url']
             api_url = item['api_url']
@@ -65,7 +66,7 @@ async def search_command(_, msg: Message):
             title = item.get('title', 'Batch')
             cat = item.get('category', 'ANIME').upper()
             total_eps = item.get('total_episodes', 0)
-            total_size = item.get('size_formatted', '0 B')
+            total_size = item.get('size_formatted') or get_human_size(item.get('total_size', 0))
             api_url = item['api_url']
             batch_id = item.get('batch_id')
             episodes = item.get('episodes', [])
@@ -87,7 +88,9 @@ async def search_command(_, msg: Message):
                 for ep in episodes:
                     ep_num = ep.get('episode_num', 1)
                     ep_dur = ep.get('duration_formatted', 'N/A')
-                    ep_size = ep.get('size_formatted', '0 B')
+                    ep_size = ep.get('size_formatted')
+                    if not ep_size or ep_size == '0 B':
+                        ep_size = get_human_size(ep.get('file_size', 0))
                     ep_name = ep.get('file_name', f'Episode {ep_num}')
                     if ep_name.endswith(('.mkv', '.mp4', '.avi', '.webm', '.ts')):
                         ep_name = ep_name.rsplit('.', 1)[0]
@@ -173,7 +176,9 @@ async def view_episodes_command(_, msg: Message):
     for ep in episodes:
         ep_num = ep.get('episode_num', 1)
         dur = ep.get('duration_formatted', 'N/A')
-        size = ep.get('size_formatted', '0 B')
+        size = ep.get('size_formatted')
+        if not size or size == '0 B':
+            size = get_human_size(ep.get('file_size', 0))
         code = ep.get('code')
         stream_url = f"{Server.BASE_URL}/stream/{code}"
         download_url = f"{Server.BASE_URL}/dl/{code}"

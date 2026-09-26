@@ -106,6 +106,7 @@ async def batch_command(_, msg: Message):
                     'episode_num': len(episodes_list) + 1,
                     'file_name': file_name,
                     'file_size': file_size,
+                    'size_formatted': get_human_size(file_size),
                     'mime_type': mime_type,
                     'duration': duration,
                     'duration_formatted': duration_formatted,
