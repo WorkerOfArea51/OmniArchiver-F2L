@@ -368,7 +368,7 @@
       </button>
 
       <!-- Direct Download -->
-      <a href="{{ mediaLink }}?dl=1" class="btn btn-download" download title="Download full media file">
+      <a href="{{ downloadLink | default(mediaLink) }}" class="btn btn-download" download title="Download full media file">
         <i class="fas fa-download"></i> Download
       </a>
     </div>

@@ -116,8 +116,10 @@ async def transmit_file(file_code):
         else:
             mime_type = 'video/mp4'
 
-    # Use 'inline' by default for web video streaming; use 'attachment' only when ?dl=1 is requested
-    disposition = 'attachment' if (request.args.get('dl') or request.args.get('download')) else 'inline'
+    # Default to 'attachment' so direct download links automatically download the file in browsers.
+    # Use 'inline' only when ?stream=1 or ?inline=1 is specified (e.g. by HTML5 video player in player.html).
+    is_streaming = (request.args.get('stream') or request.args.get('inline')) and not (request.args.get('dl') or request.args.get('download'))
+    disposition = 'inline' if is_streaming else 'attachment'
 
     headers = {
         'Content-Type': mime_type,
@@ -247,7 +249,8 @@ async def stream_file(file_code):
     if not doc:
         abort(404, 'File not found or link has expired.')
 
-    media_url = f'{Server.BASE_URL}/dl/{file_code}'
+    media_url = f'{Server.BASE_URL}/dl/{file_code}?stream=1'
+    download_url = f'{Server.BASE_URL}/dl/{file_code}'
     file_name = doc.get('file_name', 'Play Video')
     file_size_str = get_human_size(doc.get('file_size', 0))
     duration_str = doc.get('duration_formatted', '')
@@ -256,6 +259,7 @@ async def stream_file(file_code):
     return await render_template(
         'player.html',
         mediaLink=media_url,
+        downloadLink=download_url,
         fileName=file_name,
         fileSize=file_size_str,
         duration=duration_str,
