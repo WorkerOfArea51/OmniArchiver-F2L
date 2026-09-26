@@ -39,7 +39,7 @@ class Telegram:
     
     # Primary Bot
     BOT_TOKEN = env.get("TELEGRAM_BOT_TOKEN", env.get("BOT_TOKEN", "1234567:xyz"))
-    BOT_USERNAME = env.get("TELEGRAM_BOT_USERNAME", env.get("BOT_USERNAME", "BotFather"))
+    BOT_USERNAME = env.get("TELEGRAM_BOT_USERNAME", env.get("BOT_USERNAME", ""))
     
     # Multi-client worker tokens (comma, space, or newline separated)
     _raw_multi_tokens = env.get("MULTI_BOT_TOKENS", env.get("BOT_TOKENS", ""))

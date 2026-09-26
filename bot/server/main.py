@@ -26,7 +26,10 @@ bp = Blueprint('main', __name__)
 
 @bp.route('/')
 async def home():
-    return redirect(f'https://t.me/{Telegram.BOT_USERNAME}')
+    username = getattr(TelegramBot.me, 'username', None) or Telegram.BOT_USERNAME
+    if username and username.lower() != 'botfather':
+        return redirect(f'https://t.me/{username}')
+    return "OmniArchiver-F2L Streaming Server is Online", 200
 
 @bp.route('/ping')
 @bp.route('/health')
@@ -254,7 +257,7 @@ async def stream_file(file_code):
     file_name = doc.get('file_name', 'Play Video')
     file_size_str = get_human_size(doc.get('file_size', 0))
     duration_str = doc.get('duration_formatted', '')
-    bot_username = Telegram.BOT_USERNAME or ''
+    bot_username = getattr(TelegramBot.me, 'username', None) or Telegram.BOT_USERNAME or ''
 
     return await render_template(
         'player.html',

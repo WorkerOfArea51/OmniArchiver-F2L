@@ -315,7 +315,7 @@
   <!-- Top Glass Header -->
   <header>
     <div class="header-left">
-      {% if botUsername %}
+      {% if botUsername and botUsername.lower() != 'botfather' %}
       <a href="https://t.me/{{ botUsername }}" target="_blank" class="header-logo" title="Back to Bot">
         <i class="fab fa-telegram-plane"></i>
       </a>

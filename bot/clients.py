@@ -106,6 +106,9 @@ async def start_all_clients():
     # Start Main Bot
     logger.info("Starting Main Telegram Bot...")
     await TelegramBot.start()
+    if TelegramBot.me and TelegramBot.me.username:
+        Telegram.BOT_USERNAME = TelegramBot.me.username
+        logger.info("Auto-detected Telegram Bot username: @%s", Telegram.BOT_USERNAME)
     await db.create_indexes()
 
     # Check and resolve pending restart notification
