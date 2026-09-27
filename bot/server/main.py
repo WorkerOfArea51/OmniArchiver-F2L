@@ -11,7 +11,7 @@ from bot.database.files import get_file, add_bandwidth_bytes
 from bot.modules.telegram import get_message, get_file_properties
 from bot.modules.static import get_human_size
 from bot.modules.memory import flush_ram, check_memory_circuit_breaker
-from bot.modules.cache import get_cached_chunk, put_cached_chunk, is_head_or_tail, init_cache, is_chunk_cached, prefetch_tail_chunk
+from bot.modules.cache import get_cached_chunk, put_cached_chunk, is_head_or_tail, init_cache, is_chunk_cached, prefetch_tail_chunk, prefetch_head_chunk
 
 try:
     from hydrogram.errors import FloodWait
@@ -71,26 +71,30 @@ async def transmit_file(file_code):
     channel_id = doc.get('channel_id')
     message_id = doc.get('message_id')
 
-    # Select worker client for this streaming request
+    # Lazy message resolution: Contact Telegram ONLY if metadata is missing or uncached chunks are needed!
     worker = get_worker_client() or TelegramBot
+    file_msg = None
 
-    # Retrieve message with this specific worker so the file_reference is cryptographically bound to it
-    file_msg = await get_message(channel_id, message_id, client=worker)
-    if not file_msg and worker != TelegramBot:
-        # Fallback to main TelegramBot if worker is not an admin/member in the channel
-        file_msg = await get_message(channel_id, message_id, client=TelegramBot)
-        worker = TelegramBot
-
-    if not file_msg:
-        abort(404, 'Media message not found in channel.')
+    async def get_target_msg():
+        nonlocal file_msg, worker
+        if file_msg is not None:
+            return file_msg
+        file_msg = await get_message(channel_id, message_id, client=worker)
+        if not file_msg and worker != TelegramBot:
+            file_msg = await get_message(channel_id, message_id, client=TelegramBot)
+            worker = TelegramBot
+        return file_msg
 
     file_name = doc.get('file_name')
     file_size = doc.get('file_size')
     mime_type = doc.get('mime_type')
 
-    # Fallback to inspecting message if metadata is incomplete
+    # Fallback to inspecting message ONLY if metadata in database is incomplete
     if not file_name or not file_size or not mime_type:
-        f_name, f_size, m_type = get_file_properties(file_msg)
+        msg = await get_target_msg()
+        if not msg:
+            abort(404, 'Media message not found in channel.')
+        f_name, f_size, m_type = get_file_properties(msg)
         file_name = file_name or f_name
         file_size = file_size or f_size
         mime_type = mime_type or m_type
@@ -152,13 +156,17 @@ async def transmit_file(file_code):
         curr_offset = offset
         curr_chunks_needed = chunks_needed
 
-        # Proactively trigger background pre-fetch of the Tail chunk if opening chunk 0
-        if offset == 0 and total_chunks > 4 and not is_chunk_cached(file_code, total_chunks - 1):
-            asyncio.create_task(prefetch_tail_chunk(file_code, total_chunks, file_msg, channel_id=channel_id, message_id=message_id))
+        # Proactively trigger detached background pre-fetch of both Head and Tail if opening chunk 0
+        if offset == 0:
+            if not is_chunk_cached(file_code, 0):
+                asyncio.create_task(prefetch_head_chunk(file_code, total_chunks, target_msg=file_msg, channel_id=channel_id, message_id=message_id))
+            if total_chunks > 4 and not is_chunk_cached(file_code, total_chunks - 1):
+                asyncio.create_task(prefetch_tail_chunk(file_code, total_chunks, target_msg=file_msg, channel_id=channel_id, message_id=message_id))
 
         # 1. Fast Path: Serve any consecutive leading chunks from Head & Tail SSD cache (0.5ms response time)
+        # Supports in-flight waiting if chunk is currently being pre-cached by a worker!
         while curr_chunks_needed > 0:
-            cached_data = await get_cached_chunk(file_code, curr_offset)
+            cached_data = await get_cached_chunk(file_code, curr_offset, wait_in_flight=True)
             if cached_data is None:
                 break
 
@@ -263,8 +271,13 @@ async def transmit_file(file_code):
                     except (asyncio.CancelledError, Exception):
                         pass
 
+        # 2. Only now, if uncached chunks must be streamed from Telegram, resolve the message:
+        target_msg = await get_target_msg()
+        if not target_msg:
+            return
+
         try:
-            async for data in stream_with_client(worker, file_msg):
+            async for data in stream_with_client(worker, target_msg):
                 yield data
         except (asyncio.CancelledError, GeneratorExit):
             pass

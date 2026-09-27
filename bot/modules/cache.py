@@ -32,21 +32,26 @@ def is_head_or_tail(chunk_idx: int, total_chunks: int) -> bool:
         return True
     return False
 
+_IN_FLIGHT_CHUNKS: dict[tuple[str, int], asyncio.Event] = {}
+
 def is_chunk_cached(file_code: str, chunk_idx: int) -> bool:
     """Fast in-memory check whether a chunk is already cached on local SSD."""
     return (file_code, chunk_idx) in _CACHE_INDEX
 
-async def prefetch_tail_chunk(file_code: str, total_chunks: int, target_msg, channel_id: int | str = None, message_id: int = None):
+async def prefetch_chunk(file_code: str, chunk_idx: int, total_chunks: int, target_msg=None, channel_id: int | str = None, message_id: int = None):
     """
-    Proactively fetches and caches the EOF tail chunk (Matroska Cues) in the background
-    using an available worker bot when the head chunk is first requested.
-    This guarantees that when ExoPlayer jumps to the tail 1s later, it is ALREADY on SSD!
+    Proactively fetches and caches a critical chunk (Head 0 or Tail EOF) in a detached background task.
+    Uses in-flight locking so concurrent requests can wait for completion instead of duplicate downloading.
     """
-    if total_chunks <= 4:
+    if is_chunk_cached(file_code, chunk_idx):
         return
-    tail_idx = total_chunks - 1
-    if is_chunk_cached(file_code, tail_idx):
-        return
+
+    key = (file_code, chunk_idx)
+    async with _CACHE_LOCK:
+        if key in _IN_FLIGHT_CHUNKS:
+            return  # Already being fetched by another worker task
+        evt = asyncio.Event()
+        _IN_FLIGHT_CHUNKS[key] = evt
 
     try:
         from bot.clients import get_worker_client, TelegramBot
@@ -56,12 +61,30 @@ async def prefetch_tail_chunk(file_code: str, total_chunks: int, target_msg, cha
         if channel_id and message_id:
             msg = await get_message(channel_id, message_id, client=worker) or target_msg
 
-        async for chunk in worker.stream_media(msg, offset=tail_idx, limit=1):
-            await put_cached_chunk(file_code, tail_idx, chunk, total_chunks)
-            logger.info("Proactively pre-cached tail chunk %d for %s in background.", tail_idx, file_code)
+        if not msg:
+            return
+
+        async for chunk in worker.stream_media(msg, offset=chunk_idx, limit=1):
+            await put_cached_chunk(file_code, chunk_idx, chunk, total_chunks)
+            logger.info("Detached prefetch saved chunk %d for %s (size %d bytes).", chunk_idx, file_code, len(chunk))
             break
     except Exception as e:
-        logger.debug("Tail prefetch background task exception: %s", e)
+        logger.debug("Prefetch background task exception for chunk %d: %s", chunk_idx, e)
+    finally:
+        async with _CACHE_LOCK:
+            evt.set()
+            _IN_FLIGHT_CHUNKS.pop(key, None)
+
+async def prefetch_head_chunk(file_code: str, total_chunks: int, target_msg=None, channel_id: int | str = None, message_id: int = None):
+    """Detached un-cancellable prefetcher for chunk 0."""
+    await prefetch_chunk(file_code, 0, total_chunks, target_msg, channel_id, message_id)
+
+async def prefetch_tail_chunk(file_code: str, total_chunks: int, target_msg=None, channel_id: int | str = None, message_id: int = None):
+    """Detached un-cancellable prefetcher for EOF tail chunk (Matroska Cues)."""
+    if total_chunks <= 4:
+        return
+    tail_idx = total_chunks - 1
+    await prefetch_chunk(file_code, tail_idx, total_chunks, target_msg, channel_id, message_id)
 
 def init_cache():
     """Initializes the local SSD chunk cache directory and scans existing chunks into LRU index."""
@@ -92,9 +115,11 @@ def init_cache():
     except Exception as e:
         logger.warning("Failed to initialize chunk cache directory: %s", e)
 
-async def get_cached_chunk(file_code: str, chunk_idx: int) -> bytes | None:
+async def get_cached_chunk(file_code: str, chunk_idx: int, wait_in_flight: bool = True) -> bytes | None:
     """
     Retrieves a cached chunk from local SSD in ~0.5ms.
+    If chunk is currently being prefetched in background and wait_in_flight is True,
+    waits for the in-flight task to complete instead of immediately returning None.
     Returns bytes if present, or None if not cached.
     """
     if not _INITIALIZED:
@@ -102,9 +127,26 @@ async def get_cached_chunk(file_code: str, chunk_idx: int) -> bytes | None:
 
     key = (file_code, chunk_idx)
     async with _CACHE_LOCK:
-        if key not in _CACHE_INDEX:
+        has_chunk = key in _CACHE_INDEX
+        in_flight_evt = _IN_FLIGHT_CHUNKS.get(key) if (not has_chunk and wait_in_flight) else None
+
+    # If chunk is currently being downloaded in background, await its completion!
+    if in_flight_evt is not None:
+        try:
+            await asyncio.wait_for(in_flight_evt.wait(), timeout=4.0)
+        except (asyncio.TimeoutError, Exception):
+            pass
+        async with _CACHE_LOCK:
+            has_chunk = key in _CACHE_INDEX
+
+    if not has_chunk:
+        return None
+
+    async with _CACHE_LOCK:
+        if key in _CACHE_INDEX:
+            _CACHE_INDEX.move_to_end(key)
+        else:
             return None
-        _CACHE_INDEX.move_to_end(key)
 
     filename = f"{file_code}_{chunk_idx}.chunk"
     path = os.path.join(CACHE_DIR, filename)
