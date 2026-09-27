@@ -11,6 +11,7 @@ from bot.database.files import get_file, add_bandwidth_bytes
 from bot.modules.telegram import get_message, get_file_properties
 from bot.modules.static import get_human_size
 from bot.modules.memory import flush_ram, check_memory_circuit_breaker
+from bot.modules.cache import get_cached_chunk, put_cached_chunk, is_head_or_tail, init_cache
 
 try:
     from hydrogram.errors import FloodWait
@@ -23,6 +24,7 @@ except ImportError:
 logger = getLogger('server')
 
 bp = Blueprint('main', __name__)
+init_cache()
 
 @bp.route('/')
 async def home():
@@ -145,6 +147,45 @@ async def transmit_file(file_code):
         offset = current_start // chunk_size
         remaining_total = end - current_start + 1
         chunks_needed = ceil(remaining_total / chunk_size)
+        total_chunks = ceil(file_size / chunk_size)
+
+        curr_offset = offset
+        curr_chunks_needed = chunks_needed
+
+        # 1. Fast Path: Serve any consecutive leading chunks from Head & Tail SSD cache (0.5ms response time)
+        while curr_chunks_needed > 0:
+            cached_data = await get_cached_chunk(file_code, curr_offset)
+            if cached_data is None:
+                break
+
+            chunk = cached_data
+            if bytes_streamed == 0:
+                trim_start = current_start % chunk_size
+                if trim_start > 0:
+                    chunk = chunk[trim_start:]
+
+            rem_bytes = content_length - bytes_streamed
+            if rem_bytes <= 0:
+                break
+            if len(chunk) > rem_bytes:
+                chunk = chunk[:rem_bytes]
+
+            yield chunk
+            bytes_streamed += len(chunk)
+            del chunk
+            curr_offset += 1
+            curr_chunks_needed -= 1
+
+            if bytes_streamed >= content_length:
+                break
+
+        # If all requested data was served directly from cache (0ms delay), we are done without touching Telegram!
+        if curr_chunks_needed <= 0 or bytes_streamed >= content_length:
+            if bytes_streamed > 0:
+                await add_bandwidth_bytes(bytes_streamed)
+            check_memory_circuit_breaker()
+            flush_ram()
+            return
 
         _SENTINEL = object()
 
@@ -156,12 +197,17 @@ async def transmit_file(file_code):
 
             async def producer():
                 try:
+                    prod_chunk_idx = 0
                     async for chunk in target_client.stream_media(
                         target_msg,
-                        offset=offset,
-                        limit=chunks_needed,
+                        offset=curr_offset,
+                        limit=curr_chunks_needed,
                     ):
+                        actual_idx = curr_offset + prod_chunk_idx
+                        if is_head_or_tail(actual_idx, total_chunks):
+                            asyncio.create_task(put_cached_chunk(file_code, actual_idx, chunk, total_chunks))
                         await queue.put(chunk)
+                        prod_chunk_idx += 1
                 except asyncio.CancelledError:
                     raise
                 except Exception as e:
@@ -185,7 +231,7 @@ async def transmit_file(file_code):
                         break
 
                     chunk = item
-                    if chunk_index == 0:
+                    if bytes_streamed == 0:
                         trim_start = current_start % chunk_size
                         if trim_start > 0:
                             chunk = chunk[trim_start:]

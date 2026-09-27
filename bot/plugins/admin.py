@@ -203,22 +203,21 @@ async def purge_command(client, msg: Message):
 @verify_admin
 async def clean_memory_command(_, msg: Message):
     """Manually cleans memory, runs cyclic garbage collection and releases freed heap back to OS."""
-    import psutil
-    from bot.modules.memory import flush_ram
-    from bot.modules.static import get_human_size
+    from bot.modules.memory import flush_ram, get_current_ram_mb
+    from bot.modules.cache import clear_media_cache
 
-    before_ram = psutil.Process(os.getpid()).memory_info().rss
+    before_ram_mb = get_current_ram_mb()
     flush_ram()
-    after_ram = psutil.Process(os.getpid()).memory_info().rss
+    clear_media_cache()
+    after_ram_mb = get_current_ram_mb()
 
-    freed = before_ram - after_ram
-    freed_str = get_human_size(max(0, freed))
-    current_str = get_human_size(after_ram)
+    freed_mb = max(0.0, before_ram_mb - after_ram_mb)
 
     await msg.reply(
-        f"🧹 **RAM Cleaned & Compaction Finished!**\n\n"
-        f"📉 **Freed Memory:** `{freed_str}`\n"
-        f"🧠 **Current Bot Process RAM:** `{current_str}`",
+        f"🧹 **System Cleaned & Memory Compacted!**\n\n"
+        f"📉 **Freed RAM:** `{freed_mb:.1f} MB`\n"
+        f"🧠 **Current Process RAM:** `{after_ram_mb:.1f} MB`\n"
+        f"💾 **SSD Head/Tail Media Cache:** Purged cleanly",
         quote=True
     )
 

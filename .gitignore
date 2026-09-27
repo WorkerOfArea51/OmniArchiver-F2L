@@ -43,3 +43,7 @@ event-log.txt
 # Local AI Memory & Scratch
 GEMINI.md
 
+# Media Chunk Cache
+cache/
+.cache/
+
