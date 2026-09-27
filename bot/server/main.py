@@ -11,7 +11,7 @@ from bot.database.files import get_file, add_bandwidth_bytes
 from bot.modules.telegram import get_message, get_file_properties
 from bot.modules.static import get_human_size
 from bot.modules.memory import flush_ram, check_memory_circuit_breaker
-from bot.modules.cache import get_cached_chunk, put_cached_chunk, is_head_or_tail, init_cache
+from bot.modules.cache import get_cached_chunk, put_cached_chunk, is_head_or_tail, init_cache, is_chunk_cached, prefetch_tail_chunk
 
 try:
     from hydrogram.errors import FloodWait
@@ -152,6 +152,10 @@ async def transmit_file(file_code):
         curr_offset = offset
         curr_chunks_needed = chunks_needed
 
+        # Proactively trigger background pre-fetch of the Tail chunk if opening chunk 0
+        if offset == 0 and total_chunks > 4 and not is_chunk_cached(file_code, total_chunks - 1):
+            asyncio.create_task(prefetch_tail_chunk(file_code, total_chunks, file_msg, channel_id=channel_id, message_id=message_id))
+
         # 1. Fast Path: Serve any consecutive leading chunks from Head & Tail SSD cache (0.5ms response time)
         while curr_chunks_needed > 0:
             cached_data = await get_cached_chunk(file_code, curr_offset)
@@ -191,8 +195,8 @@ async def transmit_file(file_code):
 
         async def stream_with_client(target_client, target_msg):
             nonlocal bytes_streamed
-            # Buffer up to 2 chunks (2 MB) in RAM while current chunk is streaming to client
-            queue = asyncio.Queue(maxsize=2)
+            # Buffer up to 3 chunks (3 MB) in RAM while current chunk is streaming to client
+            queue = asyncio.Queue(maxsize=3)
             producer_err = []
 
             async def producer():

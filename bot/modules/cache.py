@@ -10,8 +10,8 @@ logger = getLogger('cache')
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 CACHE_DIR = os.path.join(REPO_ROOT, "cache", "media")
 
-# Maximum disk cache size: 150 MB (stores Head 2MB + Tail 1MB for ~50 active videos)
-MAX_CACHE_BYTES = 150 * 1024 * 1024
+# Maximum disk cache size: 500 MB (stores Head 4MB + Tail 2MB for ~80 active videos)
+MAX_CACHE_BYTES = 500 * 1024 * 1024
 
 _CACHE_INDEX: OrderedDict[tuple[str, int], int] = OrderedDict()
 _TOTAL_CACHE_SIZE = 0
@@ -20,15 +20,48 @@ _INITIALIZED = False
 
 def is_head_or_tail(chunk_idx: int, total_chunks: int) -> bool:
     """
-    Returns True if chunk_idx belongs to the head (first 2 MB: EBML header/codecs)
-    or tail (last 1-2 MB: Matroska Cues seek index / MP4 moov atom).
+    Returns True if chunk_idx belongs to the head (first 4 MB: EBML header/codecs/opening buffer)
+    or tail (last 2 MB: Matroska Cues seek index / MP4 moov atom).
     Only these critical seek chunks are cached to protect disk space.
     """
-    if chunk_idx in (0, 1):
+    # First 4 MB (chunks 0, 1, 2, 3) gives an instant 20-30s opening video buffer
+    if chunk_idx < 4:
         return True
+    # Last 2 MB covers all Matroska Cues and MP4 index atoms
     if total_chunks > 0 and chunk_idx >= max(0, total_chunks - 2):
         return True
     return False
+
+def is_chunk_cached(file_code: str, chunk_idx: int) -> bool:
+    """Fast in-memory check whether a chunk is already cached on local SSD."""
+    return (file_code, chunk_idx) in _CACHE_INDEX
+
+async def prefetch_tail_chunk(file_code: str, total_chunks: int, target_msg, channel_id: int | str = None, message_id: int = None):
+    """
+    Proactively fetches and caches the EOF tail chunk (Matroska Cues) in the background
+    using an available worker bot when the head chunk is first requested.
+    This guarantees that when ExoPlayer jumps to the tail 1s later, it is ALREADY on SSD!
+    """
+    if total_chunks <= 4:
+        return
+    tail_idx = total_chunks - 1
+    if is_chunk_cached(file_code, tail_idx):
+        return
+
+    try:
+        from bot.clients import get_worker_client, TelegramBot
+        from bot.modules.telegram import get_message
+        worker = get_worker_client() or TelegramBot
+        msg = target_msg
+        if channel_id and message_id:
+            msg = await get_message(channel_id, message_id, client=worker) or target_msg
+
+        async for chunk in worker.stream_media(msg, offset=tail_idx, limit=1):
+            await put_cached_chunk(file_code, tail_idx, chunk, total_chunks)
+            logger.info("Proactively pre-cached tail chunk %d for %s in background.", tail_idx, file_code)
+            break
+    except Exception as e:
+        logger.debug("Tail prefetch background task exception: %s", e)
 
 def init_cache():
     """Initializes the local SSD chunk cache directory and scans existing chunks into LRU index."""
