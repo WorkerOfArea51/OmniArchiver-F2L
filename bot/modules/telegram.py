@@ -1,3 +1,4 @@
+import asyncio
 import time
 from collections import OrderedDict
 from hydrogram import Client
@@ -36,7 +37,7 @@ async def get_message(chat_id: int | str, message_id: int, client: Client = None
     message = None
 
     try:
-        message = await target_client.get_messages(chat_id=chat_id, message_ids=message_id)
+        message = await asyncio.wait_for(target_client.get_messages(chat_id=chat_id, message_ids=message_id), timeout=5.0)
         if message and message.empty:
             message = None
     except Exception as e:
@@ -48,7 +49,7 @@ async def get_message(chat_id: int | str, message_id: int, client: Client = None
                 target_client = TelegramBot
                 client_name = getattr(target_client, 'name', 'bot')
                 cache_key = (client_name, chat_id, message_id)
-                message = await TelegramBot.get_messages(chat_id=chat_id, message_ids=message_id)
+                message = await asyncio.wait_for(TelegramBot.get_messages(chat_id=chat_id, message_ids=message_id), timeout=5.0)
                 if message and message.empty:
                     message = None
             except Exception:
