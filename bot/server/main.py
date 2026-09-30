@@ -200,11 +200,11 @@ async def transmit_file(file_code):
             return
 
         # 2. Multi-Worker Parallel Streaming Pipeline
-        # Downloads chunks concurrently across the 6-bot worker pool using a sliding lookahead window.
-        # Dynamically scales to pool size (up to 5 concurrent streams = 1.75 to 2.2 MB/s line rate).
+        # Downloads chunks concurrently across the entire bot worker pool using a sliding lookahead window.
+        # Dynamically auto-scales to pool size (up to 12 concurrent streams) without requiring any code changes!
         # Strict 7-second watchdog prevents any single worker from stalling the stream!
         pool_size = max(1, len(worker_clients))
-        MAX_CONCURRENT_CHUNKS = min(5, pool_size)
+        MAX_CONCURRENT_CHUNKS = min(12, pool_size)
         pending_tasks: dict[int, asyncio.Task] = {}
         next_chunk_to_schedule = curr_offset
         end_chunk = curr_offset + curr_chunks_needed
