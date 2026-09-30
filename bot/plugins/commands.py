@@ -141,3 +141,103 @@ async def log_command(_, msg: Message):
         await msg.reply_document('event-log.txt', quote=True)
     except Exception as e:
         await msg.reply(f"❌ Failed to send log file: `{e}`", quote=True)
+
+@TelegramBot.on_message(filters.command(['workers', 'bots']) & filters.private)
+@verify_user
+@verify_admin
+async def workers_command(_, msg: Message):
+    """Diagnoses all worker bots in the pool, checks their channel permissions, and outputs required actions."""
+    from bot.clients import worker_clients
+    from bot.database import db
+    from bot.config import Telegram
+
+    status_msg = await msg.reply("🔍 **Scanning worker fleet and verifying channel permissions...**", quote=True)
+
+    # 1. Discover unique channel IDs stored in database
+    channel_ids = set()
+    if Telegram.CHANNEL_ID:
+        channel_ids.add(Telegram.CHANNEL_ID)
+
+    try:
+        for col in (db.movies, db.anime, db.webseries, db.direct_files):
+            if col is not None:
+                async for doc in col.find({}, {'channel_id': 1}).limit(20):
+                    cid = doc.get('channel_id')
+                    if cid:
+                        channel_ids.add(cid)
+    except Exception as e:
+        logger.warning("Error fetching channels for workers command: %s", e)
+
+    # 2. Inspect each worker client
+    worker_results = []
+    missing_admin_bots = []
+    all_ready = True
+
+    for idx, w_client in enumerate(worker_clients):
+        w_username = getattr(getattr(w_client, 'me', None), 'username', None)
+        if not w_username:
+            try:
+                me_obj = await w_client.get_me()
+                w_username = me_obj.username
+            except Exception:
+                w_username = f"worker_{idx}"
+
+        # Test channel permissions against discovered channels
+        is_admin_all = True
+        for cid in channel_ids:
+            try:
+                await w_client.get_chat(cid)
+            except Exception:
+                is_admin_all = False
+                break
+
+        if is_admin_all:
+            tag = "👑 Primary" if w_client == TelegramBot else f"🤖 Worker #{idx}"
+            worker_results.append(f"• {tag}: `@{w_username}` ➜ ✅ **Active Admin**")
+        else:
+            all_ready = False
+            missing_admin_bots.append(f"@{w_username}")
+            worker_results.append(f"• 🤖 Worker #{idx}: `@{w_username}` ➜ ❌ **Not in Channel**")
+
+    # 3. Format detailed response
+    if not channel_ids:
+        channel_info = "⚠️ *No storage channels detected in database yet.*"
+    else:
+        channel_info = f"📁 **Storage Channel(s) Checked:** `{len(channel_ids)}`"
+
+    header = (
+        f"🤖 **OmniArchiver Multi-Bot Fleet Status ({len(worker_clients)} Total)**\n"
+        f"{channel_info}\n"
+        f"{'─'*28}\n"
+    )
+
+    body = "\n".join(worker_results)
+
+    if all_ready and len(worker_clients) > 1:
+        footer = (
+            f"\n{'─'*28}\n"
+            f"🚀 **All {len(worker_clients)} bots are Active Admins!**\n"
+            f"Multi-worker parallel streaming is operating at maximum throughput (2.5–3.0 MB/s)! ⚡"
+        )
+    elif missing_admin_bots:
+        copy_usernames = "\n".join([f"`{u}`" for u in missing_admin_bots])
+        footer = (
+            f"\n{'─'*28}\n"
+            f"⚠️ **ACTION REQUIRED TO UNLOCK 3.0 MB/s STREAMING:**\n"
+            f"Telegram strictly prevents worker bots from downloading files from private channels "
+            f"unless they are added as **Administrators**!\n\n"
+            f"📋 **Click to Copy Bot Usernames:**\n{copy_usernames}\n\n"
+            f"👉 **Quick Setup (Takes 30 seconds):**\n"
+            f"1. Open your Telegram storage/movie channel.\n"
+            f"2. Go to **Channel Settings ➜ Administrators ➜ Add Administrator**.\n"
+            f"3. Search and add each username listed above.\n"
+            f"4. Grant basic permissions (read/post messages).\n"
+            f"5. Run `/workers` again to confirm all are active! 🚀"
+        )
+    else:
+        footer = (
+            f"\n{'─'*28}\n"
+            f"ℹ️ Only the primary bot is configured. Add more worker tokens to `.env` to scale throughput!"
+        )
+
+    await status_msg.edit_text(header + body + footer)

@@ -147,9 +147,14 @@ async def start_all_clients():
             continue
         try:
             await client.start()
-            logger.info("Worker client #%d started successfully.", idx)
+            bot_username = getattr(client.me, 'username', 'N/A')
+            logger.info("Worker client #%d (@%s) started successfully.", idx, bot_username)
         except Exception as e:
             logger.warning("Failed to start worker client #%d: %s", idx, e)
+
+def get_all_worker_clients() -> list[Client]:
+    """Returns a list of all active worker clients (including TelegramBot as worker 0)."""
+    return list(worker_clients)
 
 async def stop_all_clients():
     logger.info("Stopping all clients...")

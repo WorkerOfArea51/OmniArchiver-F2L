@@ -76,13 +76,10 @@ async def transmit_file(file_code):
     file_msg = None
 
     async def get_target_msg():
-        nonlocal file_msg, worker
+        nonlocal file_msg
         if file_msg is not None:
             return file_msg
-        file_msg = await get_message(channel_id, message_id, client=worker)
-        if not file_msg and worker != TelegramBot:
-            file_msg = await get_message(channel_id, message_id, client=TelegramBot)
-            worker = TelegramBot
+        file_msg = await get_message(channel_id, message_id, client=TelegramBot)
         return file_msg
 
     file_name = doc.get('file_name')
@@ -203,6 +200,12 @@ async def transmit_file(file_code):
         # Downloads chunks concurrently across the entire bot worker pool using a sliding lookahead window.
         # Dynamically auto-scales to pool size (up to 12 concurrent streams) without requiring any code changes!
         # Strict 7-second watchdog prevents any single worker from stalling the stream!
+        # Resolve base media message once via TelegramBot (0ms if cached, saves repeated MTProto roundtrips)
+        base_msg = await get_target_msg()
+        if not base_msg:
+            logger.error("Failed to resolve base media message for %s (channel %s, msg %s)", file_code, channel_id, message_id)
+            return
+
         pool_size = max(1, len(worker_clients))
         MAX_CONCURRENT_CHUNKS = min(12, pool_size)
         pending_tasks: dict[int, asyncio.Task] = {}
@@ -210,6 +213,7 @@ async def transmit_file(file_code):
         end_chunk = curr_offset + curr_chunks_needed
 
         async def fetch_chunk(target_chunk_idx: int) -> bytes | None:
+            nonlocal base_msg
             # Check local SSD cache first (0.5ms response time)
             cached = await get_cached_chunk(file_code, target_chunk_idx, wait_in_flight=True)
             if cached is not None:
@@ -220,16 +224,8 @@ async def transmit_file(file_code):
                 worker_client = get_worker_client() or TelegramBot
                 worker_name = getattr(worker_client, 'name', 'bot')
                 try:
-                    msg = await get_message(channel_id, message_id, client=worker_client)
-                    if not msg and worker_client != TelegramBot:
-                        msg = await get_message(channel_id, message_id, client=TelegramBot)
-                        worker_client = TelegramBot
-
-                    if not msg:
-                        continue
-
                     async def _pull_one():
-                        async for c in worker_client.stream_media(msg, offset=target_chunk_idx, limit=1):
+                        async for c in worker_client.stream_media(base_msg, offset=target_chunk_idx, limit=1):
                             return c
                         return None
 
@@ -242,9 +238,16 @@ async def transmit_file(file_code):
                     mark_worker_cooldown(worker_name, 15)
                     logger.warning("Worker %s timed out (7s) fetching chunk %d, rotating to next worker", worker_name, target_chunk_idx)
                 except Exception as e:
-                    if "FileReferenceExpired" in type(e).__name__:
+                    err_name = type(e).__name__
+                    if any(x in err_name for x in ("ChannelPrivate", "ChatAdminRequired", "UserNotParticipant")):
+                        # Worker lacks channel permissions (not an admin). Cooldown for 10 minutes so stream stays fast!
+                        mark_worker_cooldown(worker_name, 600)
+                        logger.warning("Worker %s lacks channel permissions for channel %s (not an admin!). Falling back to next worker.", worker_name, channel_id)
+                    elif any(x in err_name for x in ("FileReferenceExpired", "FilerefUpgradeNeeded")):
                         logger.warning("FileReferenceExpired on chunk %d, refreshing message...", target_chunk_idx)
-                        msg = await get_message(channel_id, message_id, client=worker_client, force_refresh=True)
+                        refreshed = await get_message(channel_id, message_id, client=TelegramBot, force_refresh=True)
+                        if refreshed:
+                            base_msg = refreshed
                     elif isinstance(e, FloodWait):
                         wait_sec = getattr(e, 'value', 30)
                         mark_worker_cooldown(worker_name, wait_sec)
@@ -252,7 +255,7 @@ async def transmit_file(file_code):
                     else:
                         logger.warning("Worker %s error fetching chunk %d: %s", worker_name, target_chunk_idx, e)
 
-            # Final safety fallback: TelegramBot with fresh token
+            # Final safety fallback: TelegramBot with fresh message
             try:
                 fresh_msg = await get_message(channel_id, message_id, client=TelegramBot, force_refresh=True)
                 if fresh_msg:
