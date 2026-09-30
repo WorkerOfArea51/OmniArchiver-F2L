@@ -196,164 +196,86 @@ async def transmit_file(file_code):
             flush_ram()
             return
 
-        # 2. Multi-Worker Parallel Streaming Pipeline
-        # Downloads chunks concurrently across the entire bot worker pool using a sliding lookahead window.
-        # Dynamically auto-scales to pool size (up to 12 concurrent streams) without requiring any code changes!
-        # Strict 7-second watchdog prevents any single worker from stalling the stream!
-        pool_size = max(1, len(worker_clients))
-        MAX_CONCURRENT_CHUNKS = min(12, pool_size)
-        pending_tasks: dict[int, asyncio.Task] = {}
-        next_chunk_to_schedule = curr_offset
+        # 2. Resilient High-Performance Continuous Worker Streaming Engine
+        # Streams data directly and sequentially from Telegram's MTProto pipeline.
+        # Multi-connection download managers (ABDM, IDM, aria2) naturally receive dedicated worker
+        # bots per connection via get_worker_client(), eliminating internal task explosion and lock contention.
+        # Seamless failover: Automatically rotates to next healthy worker if any connection hiccup occurs.
         end_chunk = curr_offset + curr_chunks_needed
-
-        async def fetch_chunk(target_chunk_idx: int) -> bytes | None:
-            # Check local SSD cache first (0.5ms response time)
-            cached = await get_cached_chunk(file_code, target_chunk_idx, wait_in_flight=True)
-            if cached is not None:
-                return cached
-
-            # Rotate across worker pool with strict 7-second watchdog per attempt
-            for attempt in range(4):
-                worker_client = get_worker_client() or TelegramBot
-                worker_name = getattr(worker_client, 'name', 'bot')
-                try:
-                    # Worker MUST use its own client-scoped message for valid MTProto file_reference.
-                    # 0ms RAM lookup via _MESSAGE_CACHE after first retrieval.
-                    msg = await get_message(channel_id, message_id, client=worker_client)
-                    if not msg and worker_client != TelegramBot:
-                        msg = await get_message(channel_id, message_id, client=TelegramBot)
-                        worker_client = TelegramBot
-                    if not msg:
-                        continue
-
-                    async def _pull_one():
-                        async for c in worker_client.stream_media(msg, offset=target_chunk_idx, limit=1):
-                            return c
-                        return None
-
-                    chunk = await asyncio.wait_for(_pull_one(), timeout=18.0)
-                    if chunk:
-                        if is_head_or_tail(target_chunk_idx, total_chunks):
-                            asyncio.create_task(put_cached_chunk(file_code, target_chunk_idx, chunk, total_chunks))
-                        return chunk
-                except asyncio.TimeoutError:
-                    mark_worker_cooldown(worker_name, 15)
-                    logger.warning("Worker %s timed out (18s) fetching chunk %d, rotating to next worker", worker_name, target_chunk_idx)
-                except Exception as e:
-                    err_name = type(e).__name__
-                    if any(x in err_name for x in ("ChannelPrivate", "ChatAdminRequired", "UserNotParticipant")):
-                        # Worker lacks channel permissions (not an admin). Cooldown for 10 minutes so stream stays fast!
-                        mark_worker_cooldown(worker_name, 600)
-                        logger.warning("Worker %s lacks channel permissions for channel %s (not an admin!). Falling back to next worker.", worker_name, channel_id)
-                    elif any(x in err_name for x in ("FileReferenceExpired", "FilerefUpgradeNeeded")):
-                        logger.warning("FileReferenceExpired on chunk %d for %s, refreshing message...", target_chunk_idx, worker_name)
-                        await get_message(channel_id, message_id, client=worker_client, force_refresh=True)
-                    elif isinstance(e, FloodWait):
-                        wait_sec = getattr(e, 'value', 30)
-                        mark_worker_cooldown(worker_name, wait_sec)
-                        logger.warning("Worker %s hit FloodWait (%ds) fetching chunk %d, rotating to next worker", worker_name, wait_sec, target_chunk_idx)
-                    else:
-                        logger.warning("Worker %s error fetching chunk %d: %s", worker_name, target_chunk_idx, e)
-
-            # Final safety fallback: TelegramBot with fresh message
-            try:
-                fresh_msg = await get_message(channel_id, message_id, client=TelegramBot, force_refresh=True)
-                if fresh_msg:
-                    async def _pull_fallback():
-                        async for c in TelegramBot.stream_media(fresh_msg, offset=target_chunk_idx, limit=1):
-                            return c
-                        return None
-                    return await asyncio.wait_for(_pull_fallback(), timeout=18.0)
-            except Exception as fb_err:
-                logger.error("Final TelegramBot fallback failed on chunk %d: %s", target_chunk_idx, fb_err)
-            return None
-
-        # Pre-fill the sliding lookahead window across the worker pool
-        for _ in range(min(MAX_CONCURRENT_CHUNKS, curr_chunks_needed)):
-            if next_chunk_to_schedule < end_chunk:
-                pending_tasks[next_chunk_to_schedule] = asyncio.create_task(fetch_chunk(next_chunk_to_schedule))
-                next_chunk_to_schedule += 1
+        retry_count = 0
+        MAX_RETRIES = 12
 
         try:
-            current_yield_idx = curr_offset
-            while current_yield_idx < end_chunk and bytes_streamed < content_length:
-                if current_yield_idx not in pending_tasks:
-                    pending_tasks[current_yield_idx] = asyncio.create_task(fetch_chunk(current_yield_idx))
+            while curr_offset < end_chunk and bytes_streamed < content_length and retry_count < MAX_RETRIES:
+                worker_client = get_worker_client() or TelegramBot
+                worker_name = getattr(worker_client, 'name', 'bot')
 
-                task = pending_tasks.pop(current_yield_idx)
-                chunk = await task
-
-                if chunk is None:
-                    # Emergency direct pull via TelegramBot before terminating stream
-                    logger.warning("Chunk %d failed across worker pool, attempting emergency pull via TelegramBot...", current_yield_idx)
-                    try:
-                        fresh_msg = await get_message(channel_id, message_id, client=TelegramBot, force_refresh=True)
-                        if fresh_msg:
-                            async def _pull_emergency():
-                                async for c in TelegramBot.stream_media(fresh_msg, offset=current_yield_idx, limit=1):
-                                    return c
-                                return None
-                            chunk = await asyncio.wait_for(_pull_emergency(), timeout=18.0)
-                    except Exception as em_err:
-                        logger.error("Emergency pull failed for chunk %d: %s", current_yield_idx, em_err)
-
-                # Retry chunk resolution before aborting stream to client
-                retry_emergency = 0
-                while chunk is None and retry_emergency < 3:
-                    retry_emergency += 1
-                    logger.warning("Retrying chunk %d (attempt %d/3)...", current_yield_idx, retry_emergency)
+                try:
+                    msg = await get_message(channel_id, message_id, client=worker_client)
+                    if not msg and worker_client != TelegramBot:
+                        worker_client = TelegramBot
+                        worker_name = 'TelegramBot'
+                        msg = await get_message(channel_id, message_id, client=TelegramBot)
+                    if not msg:
+                        logger.warning("Could not retrieve message for %s at chunk %d", file_code, curr_offset)
+                        break
+                except Exception as msg_err:
+                    logger.warning("Error fetching message for worker %s: %s", worker_name, msg_err)
+                    mark_worker_cooldown(worker_name, 15)
+                    retry_count += 1
                     await asyncio.sleep(0.5)
-                    try:
-                        fresh_msg = await get_message(channel_id, message_id, client=TelegramBot, force_refresh=True)
-                        if fresh_msg:
-                            async def _pull_emergency_retry():
-                                async for c in TelegramBot.stream_media(fresh_msg, offset=current_yield_idx, limit=1):
-                                    return c
-                                return None
-                            chunk = await asyncio.wait_for(_pull_emergency_retry(), timeout=18.0)
-                    except Exception:
-                        pass
+                    continue
 
-                if chunk is None:
-                    logger.warning("Failed to retrieve chunk %d for %s after emergency retries", current_yield_idx, file_code)
-                    break
+                try:
+                    async for chunk in worker_client.stream_media(msg, offset=curr_offset):
+                        # Cache head and tail chunks on SSD for 0ms initial seek/probe
+                        if is_head_or_tail(curr_offset, total_chunks):
+                            asyncio.create_task(put_cached_chunk(file_code, curr_offset, chunk, total_chunks))
 
-                # Keep the sliding lookahead window filled across the worker pool
-                while len(pending_tasks) < MAX_CONCURRENT_CHUNKS and next_chunk_to_schedule < end_chunk:
-                    pending_tasks[next_chunk_to_schedule] = asyncio.create_task(fetch_chunk(next_chunk_to_schedule))
-                    next_chunk_to_schedule += 1
+                        if bytes_streamed == 0:
+                            trim_start = current_start % chunk_size
+                            if trim_start > 0:
+                                chunk = chunk[trim_start:]
 
-                if bytes_streamed == 0:
-                    trim_start = current_start % chunk_size
-                    if trim_start > 0:
-                        chunk = chunk[trim_start:]
+                        rem_bytes = content_length - bytes_streamed
+                        if rem_bytes <= 0:
+                            return
 
-                rem_bytes = content_length - bytes_streamed
-                if rem_bytes <= 0:
-                    break
+                        if len(chunk) > rem_bytes:
+                            chunk = chunk[:rem_bytes]
 
-                if len(chunk) > rem_bytes:
-                    chunk = chunk[:rem_bytes]
+                        yield chunk
+                        bytes_streamed += len(chunk)
+                        del chunk
+                        curr_offset += 1
+                        retry_count = 0  # Reset retry counter on successful chunk delivery
 
-                yield chunk
-                bytes_streamed += len(chunk)
-                del chunk
-                current_yield_idx += 1
+                        if curr_offset % 20 == 0:
+                            check_memory_circuit_breaker()
 
-                if current_yield_idx % 20 == 0:
-                    check_memory_circuit_breaker()
+                        if bytes_streamed >= content_length or curr_offset >= end_chunk:
+                            return
+
+                except (asyncio.CancelledError, GeneratorExit):
+                    raise
+                except Exception as stream_err:
+                    retry_count += 1
+                    err_name = type(stream_err).__name__
+                    logger.warning("Stream worker %s encountered %s at chunk %d (retry %d/%d). Rotating worker...",
+                                   worker_name, err_name, curr_offset, retry_count, MAX_RETRIES)
+                    if any(x in err_name for x in ("ChannelPrivate", "ChatAdminRequired", "UserNotParticipant")):
+                        mark_worker_cooldown(worker_name, 600)
+                    elif isinstance(stream_err, FloodWait):
+                        wait_sec = getattr(stream_err, 'value', 30)
+                        mark_worker_cooldown(worker_name, wait_sec)
+                    else:
+                        mark_worker_cooldown(worker_name, 15)
+                    await asyncio.sleep(0.5)
+                    # Loop continues, picks next healthy worker, and seamlessly resumes from curr_offset!
+
         except (asyncio.CancelledError, GeneratorExit):
             pass
         finally:
-            # Clean up all in-flight worker tasks immediately upon seek, pause, or disconnect
-            for t in pending_tasks.values():
-                if not t.done():
-                    t.cancel()
-                    try:
-                        await t
-                    except (asyncio.CancelledError, Exception):
-                        pass
-            pending_tasks.clear()
             if bytes_streamed > 0:
                 await add_bandwidth_bytes(bytes_streamed)
             check_memory_circuit_breaker()
