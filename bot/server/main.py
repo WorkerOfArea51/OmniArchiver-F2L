@@ -231,14 +231,14 @@ async def transmit_file(file_code):
                             return c
                         return None
 
-                    chunk = await asyncio.wait_for(_pull_one(), timeout=7.0)
+                    chunk = await asyncio.wait_for(_pull_one(), timeout=18.0)
                     if chunk:
                         if is_head_or_tail(target_chunk_idx, total_chunks):
                             asyncio.create_task(put_cached_chunk(file_code, target_chunk_idx, chunk, total_chunks))
                         return chunk
                 except asyncio.TimeoutError:
                     mark_worker_cooldown(worker_name, 15)
-                    logger.warning("Worker %s timed out (7s) fetching chunk %d, rotating to next worker", worker_name, target_chunk_idx)
+                    logger.warning("Worker %s timed out (18s) fetching chunk %d, rotating to next worker", worker_name, target_chunk_idx)
                 except Exception as e:
                     err_name = type(e).__name__
                     if any(x in err_name for x in ("ChannelPrivate", "ChatAdminRequired", "UserNotParticipant")):
@@ -263,7 +263,7 @@ async def transmit_file(file_code):
                         async for c in TelegramBot.stream_media(fresh_msg, offset=target_chunk_idx, limit=1):
                             return c
                         return None
-                    return await asyncio.wait_for(_pull_fallback(), timeout=7.0)
+                    return await asyncio.wait_for(_pull_fallback(), timeout=18.0)
             except Exception as fb_err:
                 logger.error("Final TelegramBot fallback failed on chunk %d: %s", target_chunk_idx, fb_err)
             return None
@@ -293,12 +293,29 @@ async def transmit_file(file_code):
                                 async for c in TelegramBot.stream_media(fresh_msg, offset=current_yield_idx, limit=1):
                                     return c
                                 return None
-                            chunk = await asyncio.wait_for(_pull_emergency(), timeout=8.0)
+                            chunk = await asyncio.wait_for(_pull_emergency(), timeout=18.0)
                     except Exception as em_err:
                         logger.error("Emergency pull failed for chunk %d: %s", current_yield_idx, em_err)
 
+                # Retry chunk resolution before aborting stream to client
+                retry_emergency = 0
+                while chunk is None and retry_emergency < 3:
+                    retry_emergency += 1
+                    logger.warning("Retrying chunk %d (attempt %d/3)...", current_yield_idx, retry_emergency)
+                    await asyncio.sleep(0.5)
+                    try:
+                        fresh_msg = await get_message(channel_id, message_id, client=TelegramBot, force_refresh=True)
+                        if fresh_msg:
+                            async def _pull_emergency_retry():
+                                async for c in TelegramBot.stream_media(fresh_msg, offset=current_yield_idx, limit=1):
+                                    return c
+                                return None
+                            chunk = await asyncio.wait_for(_pull_emergency_retry(), timeout=18.0)
+                    except Exception:
+                        pass
+
                 if chunk is None:
-                    logger.warning("Failed to retrieve chunk %d for %s after emergency pull", current_yield_idx, file_code)
+                    logger.warning("Failed to retrieve chunk %d for %s after emergency retries", current_yield_idx, file_code)
                     break
 
                 # Keep the sliding lookahead window filled across the worker pool

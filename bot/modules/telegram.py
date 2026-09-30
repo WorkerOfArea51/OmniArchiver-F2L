@@ -37,25 +37,32 @@ async def get_message(chat_id: int | str, message_id: int, client: Client = None
     message = None
 
     try:
-        message = await asyncio.wait_for(target_client.get_messages(chat_id=chat_id, message_ids=message_id), timeout=5.0)
+        message = await asyncio.wait_for(target_client.get_messages(chat_id=chat_id, message_ids=message_id), timeout=8.0)
         if message and message.empty:
             message = None
     except Exception as e:
         if isinstance(e, FloodWait):
             mark_worker_cooldown(client_name, getattr(e, 'value', 30))
-        # Fallback to main TelegramBot only if no specific client was requested
-        if client is None and target_client != TelegramBot:
+        # If worker client does not have peer in memory, resolve chat and retry get_messages
+        try:
+            await target_client.get_chat(chat_id)
+            message = await asyncio.wait_for(target_client.get_messages(chat_id=chat_id, message_ids=message_id), timeout=8.0)
+            if message and message.empty:
+                message = None
+        except Exception:
+            pass
+
+        # Fallback to main TelegramBot if worker failed to resolve message
+        if not message and target_client != TelegramBot:
             try:
                 target_client = TelegramBot
                 client_name = getattr(target_client, 'name', 'bot')
                 cache_key = (client_name, chat_id, message_id)
-                message = await asyncio.wait_for(TelegramBot.get_messages(chat_id=chat_id, message_ids=message_id), timeout=5.0)
+                message = await asyncio.wait_for(TelegramBot.get_messages(chat_id=chat_id, message_ids=message_id), timeout=8.0)
                 if message and message.empty:
                     message = None
             except Exception:
                 message = None
-        else:
-            message = None
 
     if message:
         if len(_MESSAGE_CACHE) >= _CACHE_MAX_SIZE:
