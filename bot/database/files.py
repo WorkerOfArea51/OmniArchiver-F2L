@@ -231,18 +231,13 @@ async def search_records(query: str, limit: int = 30) -> list[dict]:
         single_filter = {'$or': [{'file_name': {'$regex': phrase_pattern}}, {'title': {'$regex': phrase_pattern}}, {'$and': single_word_conds}]}
 
         batch_word_conds = [
-            {
-                '$or': [
-                    {'title': {'$regex': w, '$options': 'i'}},
-                    {'episodes.file_name': {'$regex': w, '$options': 'i'}}
-                ]
-            }
+            {'title': {'$regex': w, '$options': 'i'}}
             for w in words
         ]
-        batch_filter = {'$or': [{'title': {'$regex': phrase_pattern}}, {'episodes.file_name': {'$regex': phrase_pattern}}, {'$and': batch_word_conds}]}
+        batch_filter = {'$or': [{'title': {'$regex': phrase_pattern}}, {'$and': batch_word_conds}]}
     else:
         single_filter = {'$or': [{'file_name': {'$regex': phrase_pattern}}, {'title': {'$regex': phrase_pattern}}]}
-        batch_filter = {'$or': [{'title': {'$regex': phrase_pattern}}, {'episodes.file_name': {'$regex': phrase_pattern}}]}
+        batch_filter = {'title': {'$regex': phrase_pattern}}
 
     results = []
 
