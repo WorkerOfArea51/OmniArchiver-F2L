@@ -51,6 +51,8 @@ def init_worker_clients():
                 bot_token=token,
                 sleep_threshold=-1,
                 max_concurrent_transmissions=10,
+                workers=1,
+                in_memory=True,
                 no_updates=True,
                 ipv6=False
             )

@@ -205,6 +205,11 @@ async def clean_memory_command(_, msg: Message):
     """Manually cleans memory, runs cyclic garbage collection and releases freed heap back to OS."""
     from bot.modules.memory import flush_ram, get_current_ram_mb
     from bot.modules.cache import clear_media_cache
+    try:
+        from bot.modules.telegram import _MESSAGE_CACHE
+        _MESSAGE_CACHE.clear()
+    except Exception:
+        pass
 
     before_ram_mb = get_current_ram_mb()
     flush_ram()

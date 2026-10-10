@@ -17,7 +17,7 @@ except ImportError:
 
 # Fast in-memory LRU cache for channel file messages (eliminates Telegram round-trips on seek/range requests)
 _MESSAGE_CACHE: OrderedDict[tuple, tuple[Message, float]] = OrderedDict()
-_CACHE_MAX_SIZE = 500
+_CACHE_MAX_SIZE = 80
 _CACHE_TTL = 3600  # 1 hour
 
 async def get_message(chat_id: int | str, message_id: int, client: Client = None, force_refresh: bool = False) -> Message | None:

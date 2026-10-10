@@ -8,7 +8,7 @@ from bot.clients import (
     record_heartbeat_ping
 )
 from bot.server import server
-from bot.modules.memory import flush_ram
+from bot.modules.memory import flush_ram, check_memory_circuit_breaker
 
 from logging import getLogger
 logger = getLogger('heartbeat')
@@ -37,7 +37,8 @@ async def keep_alive_heartbeat():
                             pass
             record_heartbeat_ping()
             logger.info("💓 Telegram DC heartbeat sent across %d worker(s).", active_pings)
-            # Auto-compact RAM
+            # Auto-compact RAM & check strict memory ceiling
+            check_memory_circuit_breaker()
             flush_ram()
             await asyncio.sleep(120)  # Every 2 minutes
         except asyncio.CancelledError:

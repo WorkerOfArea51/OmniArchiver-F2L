@@ -97,24 +97,59 @@ def get_current_ram_mb() -> float:
 
     return 0.0
 
-def check_memory_circuit_breaker(threshold_mb: int = 380) -> bool:
+def check_memory_circuit_breaker(clean_threshold_mb: int = 420, restart_threshold_mb: int = 498, threshold_mb: int = None) -> bool:
     """
-    Serv00 512 MB Memory Guardian:
-    Checks if current process RAM approaches threshold_mb. If so, immediately triggers
-    cyclic garbage collection, jemalloc heap arena purging back to FreeBSD kernel,
-    and evicts old message cache entries to guarantee immunity from host SIGKILL.
+    Strict 500 MB Memory Guardian for Serv00 (512 MB host limit):
+    1. At clean_threshold_mb (default 420 MB): Proactively runs cyclic GC,
+       jemalloc arena purging back to FreeBSD kernel, and shrinks _MESSAGE_CACHE.
+    2. At restart_threshold_mb (default 498 MB): If heap fragmentation prevents
+       releasing memory and RAM reaches the critical ceiling, triggers an instant,
+       seamless in-place self-restart (os.execl) in ~1.5s to reset heap before Serv00's
+       host kernel can issue an abrupt SIGKILL.
     """
+    if threshold_mb is not None:
+        clean_threshold_mb = threshold_mb
+
     rss_mb = get_current_ram_mb()
-    if rss_mb >= threshold_mb:
+    if rss_mb <= 0:
+        return False
+
+    if rss_mb >= clean_threshold_mb:
+        # Step 1: In-process cleanup (no restart needed)
         flush_ram()
         try:
             from bot.modules.telegram import _MESSAGE_CACHE
-            if len(_MESSAGE_CACHE) > 50:
-                for _ in range(len(_MESSAGE_CACHE) // 2):
+            if len(_MESSAGE_CACHE) > 20:
+                while len(_MESSAGE_CACHE) > 20:
                     _MESSAGE_CACHE.popitem(last=False)
         except Exception:
             pass
+        flush_ram()
+
         new_rss = get_current_ram_mb()
-        logger.warning("Memory Circuit Breaker Tripped! RSS was %.1f MB -> reduced to %.1f MB", rss_mb, new_rss)
+        logger.warning(
+            "Memory Circuit Breaker: RSS was %.1f MB -> compacted to %.1f MB",
+            rss_mb, new_rss
+        )
+
+        # Step 2: Fail-safe self-reboot guard if still at or above critical ceiling
+        if new_rss >= restart_threshold_mb:
+            logger.critical(
+                "🚨 CRITICAL: Process RAM at %.1f MB (Ceiling: %d MB)! "
+                "Performing seamless 1.5s self-reboot to clear fragmented heap and prevent Serv00 SIGKILL...",
+                new_rss, restart_threshold_mb
+            )
+            try:
+                if os.path.exists("start.sh"):
+                    os.utime("start.sh", None)
+            except Exception:
+                pass
+            try:
+                os.execl(sys.executable, sys.executable, "-m", "bot")
+            except Exception as e:
+                logger.error("Failed to execute self-reboot: %s", e)
+                sys.exit(1)
+
         return True
+
     return False
