@@ -90,22 +90,20 @@ async def get_file(code: str, category_hint: str = None) -> dict | None:
     if not code:
         return None
 
-    # 1. Search in single file collections (movies, direct_files)
-    for col in (db.movies, db.direct_files):
+    # 1. Search in single file collections / direct document match across all collections
+    for col in (db.movies, db.direct_files, db.anime, db.webseries):
         if col is not None:
             doc = await col.find_one({'_id': code})
             if doc:
+                # If it's a single file (not a batch container with episodes array)
+                if 'episodes' not in doc:
+                    return doc
+                # If the batch _id itself was requested, return it
                 return doc
 
     # 2. Search inside batch documents (anime, webseries)
     for col in (db.anime, db.webseries):
         if col is not None:
-            # First check if the code is the batch _id itself
-            batch_doc = await col.find_one({'_id': code})
-            if batch_doc:
-                return batch_doc
-
-            # Check if code matches an episode inside the episodes array
             batch_doc = await col.find_one({'episodes.code': code})
             if batch_doc:
                 for ep in batch_doc.get('episodes', []):
@@ -132,22 +130,16 @@ async def delete_file(code: str) -> bool:
     if not code:
         return False
         
-    # Delete from single file collections
-    for col in (db.movies, db.direct_files):
+    # Delete from single file collections or direct _id match
+    for col in (db.movies, db.direct_files, db.anime, db.webseries):
         if col is not None:
             res = await col.delete_one({'_id': code})
             if res.deleted_count > 0:
                 return True
 
-    # Delete or pull from batch collections
+    # Pull single episode from batch if it was part of an episodes array
     for col in (db.anime, db.webseries):
         if col is not None:
-            # Delete whole batch if batch code matched
-            res = await col.delete_one({'_id': code})
-            if res.deleted_count > 0:
-                return True
-            
-            # Otherwise pull single episode from batch
             res = await col.update_one(
                 {'episodes.code': code},
                 {'$pull': {'episodes': {'code': code}}}
@@ -181,27 +173,48 @@ async def get_bandwidth_stats() -> tuple[int, int]:
 async def get_stats() -> dict:
     stats = {
         'movies': 0,
+        'movie_titles': 0,
         'anime': 0,
+        'anime_titles': 0,
+        'anime_episodes': 0,
         'webseries': 0,
-        'direct_files': 0
+        'webseries_titles': 0,
+        'webseries_episodes': 0,
+        'direct_files': 0,
+        'total_titles': 0
     }
     
     if db.movies is not None:
-        stats['movies'] = await db.movies.count_documents({})
+        stats['movie_titles'] = await db.movies.count_documents({})
+        stats['movies'] = stats['movie_titles']
     if db.direct_files is not None:
         stats['direct_files'] = await db.direct_files.count_documents({})
 
-    # Count total episodes across all batches in anime and webseries
+    # Count titles and total playable files/episodes across anime and webseries
     for name, col in (('anime', db.anime), ('webseries', db.webseries)):
         if col is not None:
+            stats[f'{name}_titles'] = await col.count_documents({})
             pipeline = [
-                {'$project': {'count': {'$size': {'$ifNull': ['$episodes', []]}}}},
+                {'$project': {
+                    'count': {
+                        '$cond': [
+                            {'$isArray': '$episodes'},
+                            {'$size': {'$ifNull': ['$episodes', []]}},
+                            1
+                        ]
+                    }
+                }},
                 {'$group': {'_id': None, 'total': {'$sum': '$count'}}}
             ]
             cursor = col.aggregate(pipeline)
             docs = await cursor.to_list(length=1)
-            stats[name] = docs[0]['total'] if docs else 0
+            tot_eps = docs[0]['total'] if docs else 0
+            stats[f'{name}_episodes'] = tot_eps
+            stats[name] = tot_eps
 
+    stats['total_titles'] = (
+        stats['anime_titles'] + stats['movie_titles'] + stats['webseries_titles']
+    )
     return stats
 
 async def search_records(query: str, limit: int = 30) -> list[dict]:
@@ -241,16 +254,26 @@ async def search_records(query: str, limit: int = 30) -> list[dict]:
 
     results = []
 
-    # 1. Search in single files (movies, direct_files)
-    for col, cat_name in ((db.movies, 'movies'), (db.direct_files, 'direct_files')):
+    # 1. Search in single files across movies, direct_files, and single anime/series
+    for col, default_cat in (
+        (db.movies, 'movies'),
+        (db.direct_files, 'direct_files'),
+        (db.anime, 'anime'),
+        (db.webseries, 'webseries')
+    ):
         if col is not None and len(results) < limit:
-            cursor = col.find(single_filter).sort('created_at', -1).limit(limit - len(results))
+            query_cond = dict(single_filter)
+            if col in (db.anime, db.webseries):
+                query_cond['episodes'] = {'$exists': False}
+
+            cursor = col.find(query_cond).sort('created_at', -1).limit(limit - len(results))
 
             async for doc in cursor:
                 code = doc.get('code', doc.get('_id'))
+                cat = doc.get('category', default_cat)
                 results.append({
                     'type': 'movie',
-                    'category': cat_name,
+                    'category': cat,
                     'code': code,
                     'title': doc.get('title') or doc.get('file_name'),
                     'file_name': doc.get('file_name'),
@@ -266,7 +289,9 @@ async def search_records(query: str, limit: int = 30) -> list[dict]:
     # 2. Search in batches (anime, webseries)
     for col, cat_name in ((db.anime, 'anime'), (db.webseries, 'webseries')):
         if col is not None and len(results) < limit:
-            cursor = col.find(batch_filter).sort('created_at', -1).limit(limit - len(results))
+            b_filter = dict(batch_filter)
+            b_filter['episodes'] = {'$exists': True}
+            cursor = col.find(b_filter).sort('created_at', -1).limit(limit - len(results))
 
             async for batch_doc in cursor:
                 batch_id = batch_doc.get('_id')

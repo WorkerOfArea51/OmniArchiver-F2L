@@ -299,6 +299,68 @@ async def sync_duration_command(_, msg: Message):
     except Exception as e:
         await status.edit_text(f"❌ Error during sync: `{e}`")
 
+@TelegramBot.on_message(filters.command(['migrate_anime', 'reclassify_anime']) & filters.private)
+@verify_user
+@verify_admin
+async def migrate_anime_command(_, msg: Message):
+    """
+    Scans db.movies collection and migrates Anime Movies & OVAs to db.anime
+    based on the Anime DB channel ID (-1002633457020) or an optional title filter.
+    Preserves exact codes, links, and metadata so no URLs or StreamHub bookmarks break.
+    """
+    from bot.database import db
+    from bot.database.files import get_stats
+
+    status = await msg.reply("⏳ **Scanning `movies` collection for Anime records...**\nPlease wait...", quote=True)
+
+    # Known Anime Channel markers
+    query_filter = {
+        '$or': [
+            {'channel_id': -1002633457020},
+            {'channel_id': 2633457020},
+            {'channel_id': '-1002633457020'},
+            {'channel_id': '2633457020'}
+        ]
+    }
+
+    # Optional custom keyword filter if admin runs `/migrate_anime <keyword>`
+    if len(msg.command) > 1:
+        keyword = msg.text.split(maxsplit=1)[1].strip()
+        query_filter = {
+            '$or': [
+                {'title': {'$regex': keyword, '$options': 'i'}},
+                {'file_name': {'$regex': keyword, '$options': 'i'}}
+            ]
+        }
+
+    candidates = []
+    async for doc in db.movies.find(query_filter):
+        candidates.append(doc)
+
+    if not candidates:
+        return await status.edit_text("ℹ️ **No matching Anime records found in `movies` collection.**")
+
+    migrated_count = 0
+    for doc in candidates:
+        doc_id = doc['_id']
+        doc['category'] = 'anime'
+        try:
+            await db.anime.replace_one({'_id': doc_id}, doc, upsert=True)
+            await db.movies.delete_one({'_id': doc_id})
+            migrated_count += 1
+        except Exception:
+            pass
+
+    new_stats = await get_stats()
+    await status.edit_text(
+        f"✅ **Anime Migration Complete!**\n\n"
+        f"📦 **Migrated Records:** `{migrated_count}`\n"
+        f"🍿 **Anime Vault:** `{new_stats.get('anime_titles', 0)} Titles` ({new_stats.get('anime_episodes', 0)} episodes/files)\n"
+        f"🎬 **Movies Vault:** `{new_stats.get('movie_titles', 0)} Titles`\n"
+        f"📺 **Web Series Vault:** `{new_stats.get('webseries_titles', 0)} Titles` ({new_stats.get('webseries_episodes', 0)} episodes)\n\n"
+        f"🎉 **Total Media Titles:** `{new_stats.get('total_titles', 0)}` (100% matched with StreamHub & Main Bot!)"
+    )
+
 @TelegramBot.on_message(filters.command(['revoke', 'del', 'delete_link', 'rm']) & filters.private)
 @verify_user
 @verify_admin

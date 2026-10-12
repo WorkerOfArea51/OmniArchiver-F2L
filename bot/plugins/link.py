@@ -8,17 +8,39 @@ from bot.modules.parser import parse_telegram_link
 from bot.modules.telegram import get_message, get_file_properties, is_media_message
 from bot.modules.static import MediaLinksText, FileLinksText, InvalidLinkText, get_human_size
 
-@TelegramBot.on_message(filters.command(['link', 'movie']) & filters.private)
+@TelegramBot.on_message(filters.command(['link', 'movie', 'anime', 'series', 'link_anime', 'link_movie', 'link_series']) & filters.private)
 @verify_user
 @verify_admin
 async def link_command(_, msg: Message):
-    # Check if a link was provided in command arguments
+    cmd_name = msg.command[0].lower() if msg.command else 'link'
+    
+    # 1. Determine explicit category from command name
+    target_category = None
+    if cmd_name in ('anime', 'link_anime'):
+        target_category = 'anime'
+    elif cmd_name in ('series', 'link_series'):
+        target_category = 'webseries'
+    elif cmd_name in ('movie', 'link_movie'):
+        target_category = 'movies'
+
+    # Check if a link and/or category was provided in command arguments
     channel_id = None
     message_id = None
     
-    if len(msg.command) > 1:
-        raw_link = msg.command[1]
-        parsed = parse_telegram_link(raw_link)
+    # Look for telegram link and category keywords in args
+    telegram_link = None
+    for arg in msg.command[1:]:
+        if 't.me/' in arg:
+            telegram_link = arg
+        elif arg.lower() in ('anime', 'animes'):
+            target_category = 'anime'
+        elif arg.lower() in ('series', 'webseries', 'tv'):
+            target_category = 'webseries'
+        elif arg.lower() in ('movie', 'movies'):
+            target_category = 'movies'
+
+    if telegram_link:
+        parsed = parse_telegram_link(telegram_link)
         if not parsed:
             return await msg.reply(InvalidLinkText, quote=True)
         channel_id, message_id = parsed
@@ -28,17 +50,31 @@ async def link_command(_, msg: Message):
             channel_id = reply.forward_from_chat.id
             message_id = reply.forward_from_message_id
         elif is_media_message(reply):
-            # Direct media message replied to
-            return await msg.reply("⚠️ Please forward the message from your channel or provide the post link:\n`/link <post_link>`", quote=True)
+            return await msg.reply("⚠️ Please forward the message from your channel or provide the post link:\n`/link <category> <post_link>`", quote=True)
         else:
             return await msg.reply(InvalidLinkText, quote=True)
     else:
         return await msg.reply(
-            "🎬 **Usage:**\n`/link https://t.me/c/1234567890/42`\n*(Or reply to any forwarded channel post with `/link`)*",
+            "🎬 **Usage:**\n"
+            "• `/link <telegram_link>`\n"
+            "• `/link anime <telegram_link>` *(Anime Movie/OVA)*\n"
+            "• `/link movie <telegram_link>` *(Movie)*\n"
+            "• `/link series <telegram_link>` *(Web Series Single)*\n"
+            "*(Or reply to any forwarded channel post with `/link`)*",
             quote=True
         )
 
-    status_msg = await msg.reply("⏳ *Fetching message from channel and indexing...*", quote=True)
+    # 2. Auto-detect category from channel ID if not explicitly specified
+    if not target_category:
+        chan_str = str(channel_id)
+        if chan_str.endswith("2633457020") or chan_str == "-1002633457020":
+            target_category = 'anime'
+        elif chan_str.endswith("4440703680") or chan_str == "-1004440703680":
+            target_category = 'webseries'
+        else:
+            target_category = 'movies'
+
+    status_msg = await msg.reply(f"⏳ *Fetching message from channel and indexing as {target_category.upper()}...*", quote=True)
     
     try:
         target_msg = await get_message(channel_id, message_id)
@@ -48,7 +84,7 @@ async def link_command(_, msg: Message):
         file_name, file_size, mime_type, duration, duration_formatted = get_file_properties(target_msg)
         numeric_chat_id = target_msg.chat.id if target_msg.chat else channel_id
         
-        # Save permanently to MongoDB 'movies' collection
+        # Save permanently to target collection
         doc = await save_file(
             channel_id=numeric_chat_id,
             message_id=message_id,
@@ -56,7 +92,7 @@ async def link_command(_, msg: Message):
             file_size=file_size,
             mime_type=mime_type,
             user_id=msg.from_user.id,
-            category='movies',
+            category=target_category,
             duration=duration,
             duration_formatted=duration_formatted
         )
@@ -77,11 +113,18 @@ async def link_command(_, msg: Message):
             ]
         ]
         
+        category_labels = {
+            'anime': 'Anime (Movie / OVA / Single)',
+            'movies': 'Movies / Single File',
+            'webseries': 'Web Series (Single Episode)'
+        }
+        cat_display = category_labels.get(target_category, target_category.upper())
+
         caption = MediaLinksText % {
             'file_name': file_name,
             'file_size': human_size,
             'duration': duration_formatted,
-            'category': 'Movies / Single File',
+            'category': cat_display,
             'dl_link': dl_link,
             'stream_link': stream_link
         }

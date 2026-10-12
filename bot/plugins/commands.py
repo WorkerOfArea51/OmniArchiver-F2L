@@ -49,7 +49,13 @@ async def privacy_command(_, msg: Message):
 async def stats_command(_, msg: Message):
     # Database counts
     stats = await get_stats()
-    total_files = sum(stats.values())
+    total_files = (
+        stats.get('movies', 0) +
+        stats.get('anime_episodes', 0) +
+        stats.get('webseries_episodes', 0) +
+        stats.get('direct_files', 0)
+    )
+    total_titles = stats.get('total_titles', 0)
     
     # Bandwidth & Request analytics from MongoDB
     bytes_streamed, requests_count = await get_bandwidth_stats()
@@ -113,11 +119,12 @@ async def stats_command(_, msg: Message):
 
     text = (
         "📊 **OmniArchiver Live System & Database Stats**\n\n"
-        f"🎬 **Movies Indexed:** `{stats.get('movies', 0)}`\n"
-        f"📺 **Anime Episodes:** `{stats.get('anime', 0)}`\n"
-        f"🍿 **Web Series:** `{stats.get('webseries', 0)}`\n"
+        f"🍿 **Anime:** `{stats.get('anime_titles', 0)} Titles` (`{stats.get('anime_episodes', 0)} Episodes/Files`)\n"
+        f"🎬 **Movies Indexed:** `{stats.get('movie_titles', 0)} Titles`\n"
+        f"📺 **Web Series:** `{stats.get('webseries_titles', 0)} Titles` (`{stats.get('webseries_episodes', 0)} Episodes`)\n"
         f"📁 **Direct Files:** `{stats.get('direct_files', 0)}`\n"
-        f"📦 **Total Files:** `{total_files}`\n"
+        f"{'─'*28}\n"
+        f"📦 **Vault Summary:** `{total_titles} Titles` • `{total_files} Streamable Files`\n"
         f"{'─'*28}\n"
         f"🤖 **Active Worker Bots:** `{len(worker_clients)}`\n"
         f"👑 **Admins Registered:** `{len(Telegram.ADMIN_IDS)}`\n"

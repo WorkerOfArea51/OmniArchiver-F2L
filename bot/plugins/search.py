@@ -49,10 +49,11 @@ async def search_command(_, msg: Message):
             stream_url = item['stream_url']
             download_url = item['download_url']
             api_url = item['api_url']
+            cat_display = item.get('category', 'MOVIE').upper()
 
             card = (
                 f"🎬 **{title}**\n"
-                f"📁 `MOVIE`  •  ⏱️ `{dur}`  •  💾 `{size}`\n"
+                f"📁 `{cat_display}`  •  ⏱️ `{dur}`  •  💾 `{size}`\n"
                 f"▶️ [Stream Online]({stream_url})  •  📥 [Direct Download]({download_url})\n"
                 f"⚡ **API:** `{api_url}`\n\n"
             )
@@ -241,8 +242,9 @@ async def search_api_command(_, msg: Message):
             title = item.get('title') or item.get('file_name')
             dur = item.get('duration_formatted', 'N/A')
             api_url = item['api_url']
+            cat_display = item.get('category', 'MOVIE').upper()
             text += (
-                f"🎬 **{title}** `[MOVIE • {dur}]`\n"
+                f"🎬 **{title}** `[{cat_display} • {dur}]`\n"
                 f"🔗 `{api_url}`\n\n"
             )
         else:

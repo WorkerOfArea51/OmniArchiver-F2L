@@ -27,7 +27,7 @@ I can generate permanent direct download & high-speed streaming links for files 
 **User Commands:**
 🔍 `/search <name>` - Search movies, anime & series with streaming links.
 ⚡ `/search_api <name>` - Search and get 1-tap copyable API endpoints.
-🎬 `/link <message_link>` - Index a single movie/file.
+🎬 `/link [category] <link>` - Index single file (Movie, Anime OVA, or Series).
 📺 `/batch anime <start_link> <end_link>` - Batch index Anime episodes.
 🍿 `/batch series <start_link> <end_link>` - Batch index Web Series.
 📜 `/privacy` - View Privacy Policy.
@@ -35,6 +35,7 @@ I can generate permanent direct download & high-speed streaming links for files 
 
 **Admin Commands:**
 📊 `/stats` - View live database, RAM, CPU & bandwidth metrics.
+🍿 `/migrate_anime` - Migrate Anime Movies/OVAs to Anime vault.
 ⏱️ `/sync_duration` - Auto-backfill video duration for all past records.
 🧹 `/clean` - Flush RAM caches & compact memory.
 💻 `/sh <cmd>` - Execute a terminal shell command.
