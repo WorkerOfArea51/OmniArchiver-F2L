@@ -46,8 +46,39 @@ async def keep_alive_heartbeat():
         except Exception:
             await asyncio.sleep(10)
 
+async def auto_migrate_anime_records():
+    """Startup check: seamlessly migrates any Anime Movies/OVAs in db.movies to db.anime."""
+    try:
+        from bot.database import db
+        if db.movies is None or db.anime is None:
+            return
+        query_filter = {
+            '$or': [
+                {'channel_id': -1002633457020},
+                {'channel_id': 2633457020},
+                {'channel_id': '-1002633457020'},
+                {'channel_id': '2633457020'}
+            ]
+        }
+        candidates = await db.movies.find(query_filter).to_list(length=300)
+        if candidates:
+            migrated = 0
+            for doc in candidates:
+                doc_id = doc['_id']
+                doc['category'] = 'anime'
+                try:
+                    await db.anime.replace_one({'_id': doc_id}, doc, upsert=True)
+                    await db.movies.delete_one({'_id': doc_id})
+                    migrated += 1
+                except Exception:
+                    pass
+            logger.info("🎬 Auto-migrated %d Anime record(s) from 'movies' into 'anime' collection.", migrated)
+    except Exception as e:
+        logger.warning("Startup migration check skipped: %s", e)
+
 async def main():
     await start_all_clients()
+    await auto_migrate_anime_records()
     server_task = TelegramBot.loop.create_task(server.serve())
     heartbeat_task = TelegramBot.loop.create_task(keep_alive_heartbeat())
     await idle()
