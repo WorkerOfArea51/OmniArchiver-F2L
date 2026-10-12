@@ -12,6 +12,8 @@ class MongoDatabase:
         self.anime = None
         self.webseries = None
         self.direct_files = None
+        self._omni_client = None
+        self.omni_db = None
 
     def connect(self):
         try:
@@ -29,6 +31,23 @@ class MongoDatabase:
         except Exception as e:
             logger.error("Failed to connect to MongoDB: %s", e)
             raise e
+
+        # Initialize upstream OmniArchiverDB connection (authoritative catalog source)
+        try:
+            omni_uri = getattr(Database, 'OMNI_MONGO_URI', None)
+            if omni_uri and omni_uri != Database.DATABASE_URL:
+                self._omni_client = AsyncIOMotorClient(
+                    omni_uri,
+                    maxPoolSize=5,
+                    minPoolSize=1,
+                    serverSelectionTimeoutMS=3000
+                )
+                self.omni_db = self._omni_client['OmniArchiverDB']
+            elif self._client is not None:
+                self.omni_db = self._client['OmniArchiverDB']
+            logger.info("Upstream OmniArchiverDB connection initialized.")
+        except Exception as e:
+            logger.warning("Could not initialize upstream OmniArchiverDB connection: %s", e)
 
     async def create_indexes(self):
         """Ensures high-speed O(1) indexes to eliminate query latency and CPU spikes."""

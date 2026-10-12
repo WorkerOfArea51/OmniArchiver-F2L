@@ -67,6 +67,10 @@ class Telegram:
 class Database:
     DATABASE_URL = env.get("DATABASE_URL", env.get("MONGODB_URI", "mongodb://localhost:27017"))
     DATABASE_NAME = env.get("DATABASE_NAME", "OmniArchiver")
+    OMNI_MONGO_URI = env.get(
+        "OMNI_MONGO_URI",
+        env.get("ANIME_MONGO_URI", "mongodb+srv://AADB_user:zL5jQeRtCJVjtqgf@cluster0.oohmqda.mongodb.net/?appName=Cluster0")
+    )
 
 class Server:
     BASE_URL = env.get("BASE_URL", "http://127.0.0.1:8080").rstrip("/")

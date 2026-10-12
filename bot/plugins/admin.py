@@ -391,6 +391,18 @@ async def check_db_command(_, msg: Message):
             tag = "✅ *(Live-Action Movie Channel)*" if is_live_action else "⚠️ *(Anime Movie/OVA Channel — Run /migrate_anime)*"
             lines.append(f"• Channel `{cid}`: `{cnt}` files {tag}")
 
+        if getattr(db, 'omni_db', None) is not None:
+            try:
+                upstream_anime = await db.omni_db['anime_index'].count_documents({})
+                upstream_movies = await db.omni_db['movies_index'].count_documents({})
+                upstream_series = await db.omni_db['series_index'].count_documents({})
+                lines.append("\n🌐 **Upstream OmniArchiverDB (Catalog Source of Truth):**")
+                lines.append(f"• Anime Franchises: `{upstream_anime}`")
+                lines.append(f"• Live-Action Movies: `{upstream_movies}`")
+                lines.append(f"• Web Series: `{upstream_series}`")
+            except Exception:
+                pass
+
         await status.edit_text("\n".join(lines))
     except Exception as e:
         await status.edit_text(f"❌ Error during database audit: `{e}`")

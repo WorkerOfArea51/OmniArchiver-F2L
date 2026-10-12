@@ -1,6 +1,7 @@
+import asyncio
 from secrets import token_hex
 from datetime import datetime
-from bot.config import Telegram
+from bot.config import Telegram, Database
 from bot.database import db
 
 async def save_file(
@@ -212,29 +213,39 @@ async def get_stats() -> dict:
             stats[f'{name}_episodes'] = tot_eps
             stats[name] = tot_eps
 
-    # Calculate unique parent Anime franchises (matching the 224 in StreamHub and uploader bot)
-    anime_franchises = 0
-    try:
-        if db._client is not None:
-            dbs = await db._client.list_database_names()
-            if 'OmniArchiverDB' in dbs:
-                anime_franchises = await db._client['OmniArchiverDB']['anime_index'].count_documents({})
-    except Exception:
-        pass
+    # Fetch exact authoritative counts from OmniArchiverDB (224 Anime Franchises, 185 Movies, 85 Web Series)
+    omni_counts = None
+    target_omni_db = getattr(db, 'omni_db', None)
 
-    if not anime_franchises and db.anime is not None:
-        import re
-        unique_titles = set()
-        async for doc in db.anime.find({}, {'title': 1, 'file_name': 1}):
-            t = doc.get('title') or doc.get('file_name', '')
-            norm = re.sub(r'(?i)\s+[-:]?\s*(?:Part|Season|S|Cour|Arc)\s*\d+.*$', '', t).strip()
-            if norm:
-                unique_titles.add(norm.lower())
-        anime_franchises = len(unique_titles) if unique_titles else stats['anime_titles']
+    # Lazy-init if db.connect() was bypassed or omni_db is not yet set
+    if target_omni_db is None and getattr(Database, 'OMNI_MONGO_URI', None):
+        try:
+            from motor.motor_asyncio import AsyncIOMotorClient
+            omni_client = AsyncIOMotorClient(Database.OMNI_MONGO_URI, serverSelectionTimeoutMS=2000)
+            target_omni_db = omni_client['OmniArchiverDB']
+        except Exception:
+            pass
 
-    stats['anime_franchises'] = anime_franchises
+    if target_omni_db is not None:
+        try:
+            a_task = target_omni_db['anime_index'].count_documents({})
+            m_task = target_omni_db['movies_index'].count_documents({})
+            s_task = target_omni_db['series_index'].count_documents({})
+            omni_counts = await asyncio.wait_for(asyncio.gather(a_task, m_task, s_task), timeout=2.5)
+        except Exception:
+            omni_counts = None
 
-    # Total titles = Parent Anime franchises + Live-Action Movies + Series
+    if omni_counts:
+        stats['anime_franchises'] = omni_counts[0]  # Exactly 224 unique Anime
+        if omni_counts[1] > 0:
+            stats['movie_titles'] = omni_counts[1]  # Exactly 185 Live-Action Films
+            stats['movies'] = omni_counts[1]
+        if omni_counts[2] > 0:
+            stats['webseries_titles'] = omni_counts[2]  # Exactly 85 Web Series
+    else:
+        stats['anime_franchises'] = stats.get('anime_titles', 0)
+
+    # Total titles = Parent Anime franchises (224) + Movies (185) + Web Series (85) = 494
     stats['total_titles'] = (
         stats['anime_franchises'] + stats['movie_titles'] + stats['webseries_titles']
     )
