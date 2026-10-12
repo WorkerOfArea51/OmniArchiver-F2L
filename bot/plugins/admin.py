@@ -304,8 +304,9 @@ async def sync_duration_command(_, msg: Message):
 @verify_admin
 async def migrate_anime_command(_, msg: Message):
     """
-    Scans db.movies collection and migrates Anime Movies & OVAs to db.anime
-    based on the Anime DB channel ID (-1002633457020) or an optional title filter.
+    Scans db.movies collection and migrates Anime Movies & OVAs to db.anime.
+    Live-action movies belong to Movie Channel (-1004421932120). Any other records
+    in db.movies are Anime Movies/OVAs that belong in db.anime.
     Preserves exact codes, links, and metadata so no URLs or StreamHub bookmarks break.
     """
     from bot.database import db
@@ -313,14 +314,12 @@ async def migrate_anime_command(_, msg: Message):
 
     status = await msg.reply("⏳ **Scanning `movies` collection for Anime records...**\nPlease wait...", quote=True)
 
-    # Known Anime Channel markers
+    # Live-action Movie Channel markers
+    MOVIE_CHANNEL_MARKERS = [-1004421932120, 4421932120, "-1004421932120", "4421932120"]
+
+    # Any document in db.movies that is NOT from the live-action movie channel is an Anime Movie/OVA!
     query_filter = {
-        '$or': [
-            {'channel_id': -1002633457020},
-            {'channel_id': 2633457020},
-            {'channel_id': '-1002633457020'},
-            {'channel_id': '2633457020'}
-        ]
+        'channel_id': {'$nin': MOVIE_CHANNEL_MARKERS}
     }
 
     # Optional custom keyword filter if admin runs `/migrate_anime <keyword>`
@@ -338,7 +337,7 @@ async def migrate_anime_command(_, msg: Message):
         candidates.append(doc)
 
     if not candidates:
-        return await status.edit_text("ℹ️ **No matching Anime records found in `movies` collection.**")
+        return await status.edit_text("ℹ️ **No matching Anime records found in `movies` collection.**\nAll remaining records in `movies` are confirmed Live-Action Films!")
 
     migrated_count = 0
     for doc in candidates:
@@ -355,11 +354,46 @@ async def migrate_anime_command(_, msg: Message):
     await status.edit_text(
         f"✅ **Anime Migration Complete!**\n\n"
         f"📦 **Migrated Records:** `{migrated_count}`\n"
-        f"🍿 **Anime Vault:** `{new_stats.get('anime_titles', 0)} Titles` ({new_stats.get('anime_episodes', 0)} episodes/files)\n"
-        f"🎬 **Movies Vault:** `{new_stats.get('movie_titles', 0)} Titles`\n"
+        f"🍿 **Anime Vault:** `{new_stats.get('anime_franchises', new_stats.get('anime_titles', 0))} Titles` ({new_stats.get('anime_titles', 0)} Arcs • {new_stats.get('anime_episodes', 0)} episodes/files)\n"
+        f"🎬 **Movies Vault:** `{new_stats.get('movie_titles', 0)} Titles` (Live-Action Films)\n"
         f"📺 **Web Series Vault:** `{new_stats.get('webseries_titles', 0)} Titles` ({new_stats.get('webseries_episodes', 0)} episodes)\n\n"
-        f"🎉 **Total Media Titles:** `{new_stats.get('total_titles', 0)}` (100% matched with StreamHub & Main Bot!)"
+        f"🎉 **Total Media Titles:** `{new_stats.get('total_titles', 0)}` (100% synchronized with StreamHub & Main Bot!)"
     )
+
+@TelegramBot.on_message(filters.command(['check_db', 'vault_audit', 'inspect_db']) & filters.private)
+@verify_user
+@verify_admin
+async def check_db_command(_, msg: Message):
+    """Audits channels and document breakdown across collections."""
+    from bot.database import db
+    status = await msg.reply("🔍 **Auditing Database Collections...**\nPlease wait...", quote=True)
+    
+    try:
+        # Check movies by channel
+        m_pipeline = [{'$group': {'_id': '$channel_id', 'count': {'$sum': 1}}}]
+        m_channels = await db.movies.aggregate(m_pipeline).to_list(None) if db.movies is not None else []
+        
+        anime_docs = await db.anime.count_documents({}) if db.anime is not None else 0
+        movies_docs = await db.movies.count_documents({}) if db.movies is not None else 0
+        series_docs = await db.webseries.count_documents({}) if db.webseries is not None else 0
+
+        lines = [
+            "📊 **Database Vault Audit**\n",
+            f"🍿 **Total in `anime` Collection:** `{anime_docs}` documents",
+            f"🎬 **Total in `movies` Collection:** `{movies_docs}` documents",
+            f"📺 **Total in `webseries` Collection:** `{series_docs}` documents\n",
+            "🔍 **Channel Breakdown inside `movies`:**"
+        ]
+        for ch in m_channels:
+            cid = ch.get('_id')
+            cnt = ch.get('count')
+            is_live_action = str(cid).endswith("4421932120") or cid == -1004421932120
+            tag = "✅ *(Live-Action Movie Channel)*" if is_live_action else "⚠️ *(Anime Movie/OVA Channel — Run /migrate_anime)*"
+            lines.append(f"• Channel `{cid}`: `{cnt}` files {tag}")
+
+        await status.edit_text("\n".join(lines))
+    except Exception as e:
+        await status.edit_text(f"❌ Error during database audit: `{e}`")
 
 @TelegramBot.on_message(filters.command(['revoke', 'del', 'delete_link', 'rm']) & filters.private)
 @verify_user

@@ -52,13 +52,9 @@ async def auto_migrate_anime_records():
         from bot.database import db
         if db.movies is None or db.anime is None:
             return
+        MOVIE_CHANNEL_MARKERS = [-1004421932120, 4421932120, "-1004421932120", "4421932120"]
         query_filter = {
-            '$or': [
-                {'channel_id': -1002633457020},
-                {'channel_id': 2633457020},
-                {'channel_id': '-1002633457020'},
-                {'channel_id': '2633457020'}
-            ]
+            'channel_id': {'$nin': MOVIE_CHANNEL_MARKERS}
         }
         candidates = await db.movies.find(query_filter).to_list(length=300)
         if candidates:

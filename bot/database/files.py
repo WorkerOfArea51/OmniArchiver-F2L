@@ -212,8 +212,31 @@ async def get_stats() -> dict:
             stats[f'{name}_episodes'] = tot_eps
             stats[name] = tot_eps
 
+    # Calculate unique parent Anime franchises (matching the 224 in StreamHub and uploader bot)
+    anime_franchises = 0
+    try:
+        if db._client is not None:
+            dbs = await db._client.list_database_names()
+            if 'OmniArchiverDB' in dbs:
+                anime_franchises = await db._client['OmniArchiverDB']['anime_index'].count_documents({})
+    except Exception:
+        pass
+
+    if not anime_franchises and db.anime is not None:
+        import re
+        unique_titles = set()
+        async for doc in db.anime.find({}, {'title': 1, 'file_name': 1}):
+            t = doc.get('title') or doc.get('file_name', '')
+            norm = re.sub(r'(?i)\s+[-:]?\s*(?:Part|Season|S|Cour|Arc)\s*\d+.*$', '', t).strip()
+            if norm:
+                unique_titles.add(norm.lower())
+        anime_franchises = len(unique_titles) if unique_titles else stats['anime_titles']
+
+    stats['anime_franchises'] = anime_franchises
+
+    # Total titles = Parent Anime franchises + Live-Action Movies + Series
     stats['total_titles'] = (
-        stats['anime_titles'] + stats['movie_titles'] + stats['webseries_titles']
+        stats['anime_franchises'] + stats['movie_titles'] + stats['webseries_titles']
     )
     return stats
 

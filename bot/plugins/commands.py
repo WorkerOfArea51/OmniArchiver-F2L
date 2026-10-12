@@ -119,7 +119,7 @@ async def stats_command(_, msg: Message):
 
     text = (
         "📊 **OmniArchiver Live System & Database Stats**\n\n"
-        f"🍿 **Anime:** `{stats.get('anime_titles', 0)} Titles` (`{stats.get('anime_episodes', 0)} Episodes/Files`)\n"
+        f"🍿 **Anime:** `{stats.get('anime_franchises', stats.get('anime_titles', 0))} Titles` (`{stats.get('anime_titles', 0)} Arcs` • `{stats.get('anime_episodes', 0)} Episodes/Files`)\n"
         f"🎬 **Movies Indexed:** `{stats.get('movie_titles', 0)} Titles`\n"
         f"📺 **Web Series:** `{stats.get('webseries_titles', 0)} Titles` (`{stats.get('webseries_episodes', 0)} Episodes`)\n"
         f"📁 **Direct Files:** `{stats.get('direct_files', 0)}`\n"
