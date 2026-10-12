@@ -35,7 +35,6 @@ I can generate permanent direct download & high-speed streaming links for files 
 
 **Admin Commands:**
 📊 `/stats` - View live database, RAM, CPU & bandwidth metrics.
-🍿 `/migrate_anime` - Migrate Anime Movies/OVAs to Anime vault.
 ⏱️ `/sync_duration` - Auto-backfill video duration for all past records.
 🧹 `/clean` - Flush RAM caches & compact memory.
 💻 `/sh <cmd>` - Execute a terminal shell command.
