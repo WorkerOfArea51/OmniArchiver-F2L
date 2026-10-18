@@ -35,12 +35,12 @@ class MongoDatabase:
         # Initialize upstream OmniArchiverDB connection (authoritative catalog source)
         try:
             omni_uri = getattr(Database, 'OMNI_MONGO_URI', None)
-            if omni_uri and omni_uri != Database.DATABASE_URL:
+            if omni_uri:
                 self._omni_client = AsyncIOMotorClient(
                     omni_uri,
                     maxPoolSize=5,
                     minPoolSize=1,
-                    serverSelectionTimeoutMS=3000
+                    serverSelectionTimeoutMS=7000
                 )
                 self.omni_db = self._omni_client['OmniArchiverDB']
             elif self._client is not None:
