@@ -77,7 +77,7 @@ async def link_command(_, msg: Message):
     status_msg = await msg.reply(f"⏳ *Fetching message from channel and indexing as {target_category.upper()}...*", quote=True)
     
     try:
-        target_msg = await get_message(channel_id, message_id)
+        target_msg = await get_message(channel_id, message_id, force_refresh=True)
         if not target_msg or not is_media_message(target_msg):
             return await status_msg.edit_text("❌ Could not find a valid media file in that channel message.\nMake sure the bot is an **Admin** in that channel!")
 

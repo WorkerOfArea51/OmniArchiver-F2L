@@ -91,7 +91,7 @@ async def batch_command(_, msg: Message):
 
     for idx, curr_id in enumerate(range(start_id, end_id + 1), start=1):
         try:
-            target_msg = await get_message(channel_id, curr_id)
+            target_msg = await get_message(channel_id, curr_id, force_refresh=True)
             if target_msg and is_media_message(target_msg):
                 file_name, file_size, mime_type, duration, duration_formatted = get_file_properties(target_msg)
                 numeric_chat_id = target_msg.chat.id if target_msg.chat else channel_id

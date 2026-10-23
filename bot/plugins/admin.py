@@ -322,16 +322,45 @@ async def revoke_command(_, msg: Message):
         )
 
     raw_input = msg.command[1].strip()
-    # Extract code/id from URL if full URL is pasted
-    code = raw_input.rstrip('/').split('/')[-1].strip()
+    from bot.modules.parser import parse_telegram_link
+    parsed_tg = parse_telegram_link(raw_input)
 
-    doc = await get_file(code)
+    doc = None
+    code = None
+    if parsed_tg:
+        chan_id, msg_id = parsed_tg
+        from bot.database import db
+        for col in (db.movies, db.direct_files, db.anime, db.webseries):
+            if col is not None:
+                doc = await col.find_one({'channel_id': chan_id, 'message_id': msg_id})
+                if doc:
+                    break
+        if not doc:
+            return await msg.reply("❌ No database record found matching that channel message link.", quote=True)
+        code = doc.get('code') or str(doc.get('_id'))
+    else:
+        # Extract code/id from URL if full URL is pasted
+        code = raw_input.rstrip('/').split('/')[-1].strip()
+        doc = await get_file(code)
+
     if not doc:
         return await msg.reply("❌ Record not found in database or was already revoked.", quote=True)
 
     file_title = doc.get('title') or doc.get('file_name', 'N/A')
     episodes = doc.get('episodes')
     await delete_file(code)
+
+    # Invalidate in-memory Telegram message cache across all workers so replaced files don't stay cached
+    chan_id = doc.get('channel_id')
+    msg_id = doc.get('message_id')
+    if chan_id and msg_id:
+        from bot.modules.telegram import invalidate_message_cache
+        invalidate_message_cache(chan_id, msg_id)
+    for ep in doc.get('episodes', []):
+        ep_msg_id = ep.get('message_id')
+        if chan_id and ep_msg_id:
+            from bot.modules.telegram import invalidate_message_cache
+            invalidate_message_cache(chan_id, ep_msg_id)
 
     if episodes is not None:
         batch_info = f"📦 **Type:** `Entire Batch ({len(episodes)} episodes removed)`\n"

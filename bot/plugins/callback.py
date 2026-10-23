@@ -25,6 +25,18 @@ async def manage_callback(bot, q: CallbackQuery):
 
         # Delete database record
         await delete_file(code)
+
+        # Invalidate Telegram message cache across all workers
+        chan_id = doc.get('channel_id')
+        msg_id = doc.get('message_id')
+        if chan_id and msg_id:
+            from bot.modules.telegram import invalidate_message_cache
+            invalidate_message_cache(chan_id, msg_id)
+        for ep in doc.get('episodes', []):
+            ep_msg_id = ep.get('message_id')
+            if chan_id and ep_msg_id:
+                from bot.modules.telegram import invalidate_message_cache
+                invalidate_message_cache(chan_id, ep_msg_id)
         
         # If it was a direct file uploaded to the bin channel, optionally delete channel message
         if doc.get('category') == 'direct_files' and doc.get('channel_id') == Telegram.CHANNEL_ID:

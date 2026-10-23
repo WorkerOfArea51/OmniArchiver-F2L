@@ -20,13 +20,28 @@ _MESSAGE_CACHE: OrderedDict[tuple, tuple[Message, float]] = OrderedDict()
 _CACHE_MAX_SIZE = 80
 _CACHE_TTL = 3600  # 1 hour
 
+def invalidate_message_cache(chat_id: int | str = None, message_id: int = None):
+    """Evicts cached message(s) from memory across all worker clients immediately."""
+    if chat_id is None and message_id is None:
+        _MESSAGE_CACHE.clear()
+        return
+
+    keys_to_remove = [
+        k for k in list(_MESSAGE_CACHE.keys())
+        if (chat_id is None or str(k[1]) == str(chat_id)) and (message_id is None or k[2] == message_id)
+    ]
+    for k in keys_to_remove:
+        _MESSAGE_CACHE.pop(k, None)
+
 async def get_message(chat_id: int | str, message_id: int, client: Client = None, force_refresh: bool = False) -> Message | None:
     target_client = client or get_worker_client() or TelegramBot
     client_name = getattr(target_client, 'name', 'bot')
     cache_key = (client_name, chat_id, message_id)
     now = time.time()
 
-    if not force_refresh and cache_key in _MESSAGE_CACHE:
+    if force_refresh:
+        invalidate_message_cache(chat_id, message_id)
+    elif cache_key in _MESSAGE_CACHE:
         cached_msg, ts = _MESSAGE_CACHE[cache_key]
         if now - ts < _CACHE_TTL:
             _MESSAGE_CACHE.move_to_end(cache_key)

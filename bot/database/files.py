@@ -28,6 +28,28 @@ async def save_file(
         'message_id': message_id
     })
     if existing:
+        # Auto-detect if file in channel post was replaced or modified
+        if (
+            file_size != existing.get('file_size')
+            or file_name != existing.get('file_name')
+            or duration != existing.get('duration')
+        ):
+            update_data = {
+                'file_name': file_name,
+                'file_size': file_size,
+                'mime_type': mime_type,
+                'duration': duration,
+                'duration_formatted': duration_formatted,
+                'title': title or file_name,
+                'updated_at': datetime.utcnow()
+            }
+            await collection.update_one({'_id': existing['_id']}, {'$set': update_data})
+            existing.update(update_data)
+            try:
+                from bot.modules.cache import evict_file_chunks
+                evict_file_chunks(existing['_id'])
+            except Exception:
+                pass
         return existing
 
     code = token_hex(Telegram.SECRET_CODE_LENGTH)
@@ -69,6 +91,17 @@ async def save_batch(
         'end_id': end_id
     })
     if existing:
+        # Check if batch episodes or title were updated
+        if episodes != existing.get('episodes') or (title and title != existing.get('title')):
+            update_data = {
+                'episodes': episodes,
+                'total_episodes': len(episodes),
+                'updated_at': datetime.utcnow()
+            }
+            if title:
+                update_data['title'] = title
+            await collection.update_one({'_id': existing['_id']}, {'$set': update_data})
+            existing.update(update_data)
         return existing
 
     batch_code = token_hex(16)
@@ -139,6 +172,11 @@ async def delete_file(code: str) -> bool:
         if col is not None:
             res = await col.delete_one({'_id': code})
             if res.deleted_count > 0:
+                try:
+                    from bot.modules.cache import evict_file_chunks
+                    evict_file_chunks(code)
+                except Exception:
+                    pass
                 return True
 
     # Pull single episode from batch if it was part of an episodes array
@@ -149,6 +187,11 @@ async def delete_file(code: str) -> bool:
                 {'$pull': {'episodes': {'code': code}}}
             )
             if res.modified_count > 0:
+                try:
+                    from bot.modules.cache import evict_file_chunks
+                    evict_file_chunks(code)
+                except Exception:
+                    pass
                 return True
 
     return False

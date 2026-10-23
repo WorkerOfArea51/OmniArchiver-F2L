@@ -215,6 +215,27 @@ async def put_cached_chunk(file_code: str, chunk_idx: int, data: bytes, total_ch
     except Exception as e:
         logger.warning("Error saving cached chunk %s_%d: %s", file_code, chunk_idx, e)
 
+def evict_file_chunks(file_code: str):
+    """Removes any cached SSD chunks for a specific file code so replaced media streams fresh."""
+    global _TOTAL_CACHE_SIZE
+    if not file_code:
+        return
+    try:
+        keys_to_remove = [k for k in _CACHE_INDEX.keys() if k[0] == file_code]
+        for key in keys_to_remove:
+            size = _CACHE_INDEX.pop(key, 0)
+            _TOTAL_CACHE_SIZE -= size
+            fpath = os.path.join(CACHE_DIR, f"{key[0]}_{key[1]}.chunk")
+            try:
+                if os.path.exists(fpath):
+                    os.remove(fpath)
+            except Exception:
+                pass
+        if keys_to_remove:
+            logger.info("Evicted %d cached chunk(s) for file %s.", len(keys_to_remove), file_code)
+    except Exception as e:
+        logger.warning("Error evicting chunks for %s: %s", file_code, e)
+
 def clear_media_cache():
     """Removes all cached chunks from disk to free space immediately."""
     global _TOTAL_CACHE_SIZE
