@@ -4,7 +4,7 @@ from quart import Blueprint, Response, request, render_template, redirect, jsoni
 from math import ceil
 from re import match as re_match
 from .error import abort
-from bot.clients import get_worker_client, TelegramBot, mark_worker_cooldown, worker_clients, is_worker_on_cooldown, warm_media_session
+from bot.clients import get_worker_client, TelegramBot, mark_worker_cooldown, worker_clients, is_worker_on_cooldown
 from hydrogram.session.session import Session
 Session.START_TIMEOUT = 25.0
 Session.WAIT_TIMEOUT = 45.0
@@ -518,18 +518,6 @@ async def api_debug_file(file_code):
     except Exception as e:
         import traceback
         return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
-
-@bp.route('/api/warm_dc/<int:dc_id>')
-async def api_warm_dc(dc_id):
-    import time
-    t0 = time.time()
-    session = await warm_media_session(TelegramBot, dc_id)
-    return jsonify({
-        'status': 'ok' if session else 'failed',
-        'dc_id': dc_id,
-        'elapsed': round(time.time() - t0, 2),
-        'media_sessions_active': list(TelegramBot.media_sessions.keys())
-    }), 200
 
 @bp.route('/api/version')
 async def api_version():
