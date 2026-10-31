@@ -448,6 +448,59 @@ async def api_get_movies():
         })
     return jsonify({'status': 'success', 'count': len(movies), 'movies': movies}), 200
 
+@bp.route('/api/debug_file/<string:file_code>')
+async def api_debug_file(file_code):
+    import time
+    t0 = time.time()
+    try:
+        doc = await get_file(file_code)
+        if not doc:
+            return jsonify({'error': 'doc not found in database'}), 404
+        channel_id = doc.get('channel_id')
+        message_id = doc.get('message_id')
+
+        # Test message resolution with TelegramBot
+        t_resolve = time.time()
+        msg = await get_message(channel_id, message_id, client=TelegramBot)
+        dt_resolve = round(time.time() - t_resolve, 2)
+
+        if not msg:
+            return jsonify({
+                'status': 'error',
+                'error': 'Message not found in channel via TelegramBot',
+                'channel_id': channel_id,
+                'message_id': message_id,
+                'resolve_time': dt_resolve
+            }), 404
+
+        media = getattr(msg, 'video', None) or getattr(msg, 'document', None)
+        file_name = getattr(media, 'file_name', '')
+        file_size = getattr(media, 'file_size', 0)
+        dc_id = getattr(media, 'dc_id', None)
+
+        w1_msg = None
+        if len(worker_clients) > 1:
+            try:
+                w1_msg = await get_message(channel_id, message_id, client=worker_clients[1])
+            except Exception as e:
+                w1_msg = str(e)
+
+        return jsonify({
+            'status': 'ok',
+            'channel_id': channel_id,
+            'message_id': message_id,
+            'file_name': file_name,
+            'file_size': file_size,
+            'dc_id': dc_id,
+            'resolve_time': dt_resolve,
+            'w1_msg_found': w1_msg is not None and not isinstance(w1_msg, str),
+            'w1_status': str(w1_msg) if isinstance(w1_msg, str) else 'found',
+            'total_time': round(time.time() - t0, 2)
+        }), 200
+    except Exception as e:
+        import traceback
+        return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
+
 @bp.route('/api/version')
 async def api_version():
     import subprocess
