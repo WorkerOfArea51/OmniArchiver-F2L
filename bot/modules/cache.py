@@ -57,9 +57,10 @@ async def prefetch_chunk(file_code: str, chunk_idx: int, total_chunks: int, targ
         from bot.clients import get_worker_client, TelegramBot, mark_worker_cooldown
         from bot.modules.telegram import get_message
 
-        clients_to_try = [get_worker_client() or TelegramBot]
-        if TelegramBot not in clients_to_try:
-            clients_to_try.append(TelegramBot)
+        clients_to_try = [TelegramBot]
+        aux_worker = get_worker_client()
+        if aux_worker and aux_worker != TelegramBot:
+            clients_to_try.append(aux_worker)
 
         saved = False
         for worker in clients_to_try:

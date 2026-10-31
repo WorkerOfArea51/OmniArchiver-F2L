@@ -52,7 +52,7 @@ def init_worker_clients():
                 sleep_threshold=-1,
                 max_concurrent_transmissions=10,
                 workers=1,
-                in_memory=True,
+                in_memory=False,
                 no_updates=True,
                 ipv6=False
             )

@@ -221,11 +221,9 @@ async def transmit_file(file_code):
 
         try:
             while curr_offset < end_chunk and bytes_streamed < content_length and retry_count < MAX_RETRIES:
-                # If workers are failing or on cooldown, immediately use primary TelegramBot
-                if retry_count >= 2:
-                    worker_client = TelegramBot
-                else:
-                    worker_client = get_worker_client() or TelegramBot
+                # Prioritize primary TelegramBot (permanent verified session on disk with zero DC auth errors)
+                # Auxiliary workers serve as fallback pool if primary is rate-limited
+                worker_client = TelegramBot if (retry_count == 0 or not worker_clients) else (get_worker_client() or TelegramBot)
                 worker_name = getattr(worker_client, 'name', 'bot')
 
                 worker_yielded_any = False
