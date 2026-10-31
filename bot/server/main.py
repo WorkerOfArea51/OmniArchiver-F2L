@@ -241,10 +241,9 @@ async def transmit_file(file_code):
                         is_first_chunk = True
 
                         while p_offset < end_chunk:
-                            # 15.0s handshake window for the first chunk (allows MTProto DH key exchange), 6.0s for subsequent streaming
-                            chunk_timeout = 15.0 if is_first_chunk else 6.0
+                            # Generous 25.0s timeout per chunk: allows MTProto DH handshake and transatlantic/transpacific latency without premature stall cancellation
                             try:
-                                chunk = await asyncio.wait_for(stream_iter.__anext__(), timeout=chunk_timeout)
+                                chunk = await asyncio.wait_for(stream_iter.__anext__(), timeout=25.0)
                             except StopAsyncIteration:
                                 break
                             except (asyncio.TimeoutError, Exception) as fetch_err:
@@ -252,8 +251,6 @@ async def transmit_file(file_code):
                                 logger.warning('Stream worker %s stalled on chunk %d (%s). Rotating...',
                                                worker_name, p_offset, err_name)
                                 break
-
-                            is_first_chunk = False
 
                             if is_head_or_tail(p_offset, total_chunks):
                                 asyncio.create_task(put_cached_chunk(file_code, p_offset, chunk, total_chunks))
