@@ -157,8 +157,8 @@ async def transmit_file(file_code):
         if offset == 0:
             if not is_chunk_cached(file_code, 0):
                 asyncio.create_task(prefetch_head_chunk(file_code, total_chunks, target_msg=file_msg, channel_id=channel_id, message_id=message_id))
-            if total_chunks > 10 and not all(is_chunk_cached(file_code, idx) for idx in range(max(0, total_chunks - 4), total_chunks)):
-                asyncio.create_task(prefetch_tail_chunk(file_code, total_chunks, target_msg=file_msg, channel_id=channel_id, message_id=message_id))
+            pass
+
 
         # 1. Fast Path: Serve any consecutive leading chunks from Head & Tail SSD cache (0.5ms response time)
         # Supports in-flight waiting if chunk is currently being pre-cached by a worker!
@@ -219,76 +219,113 @@ async def transmit_file(file_code):
             flush_ram()
             return
 
-        try:
-            while curr_offset < end_chunk and bytes_streamed < content_length and retry_count < MAX_RETRIES:
-                # Prioritize primary TelegramBot (permanent verified session on disk with zero DC auth errors)
-                # Auxiliary workers serve as fallback pool if primary is rate-limited
-                worker_client = TelegramBot if (retry_count == 0 or not worker_clients) else (get_worker_client() or TelegramBot)
-                worker_name = getattr(worker_client, 'name', 'bot')
+        # 2. High-Throughput MTProto Streaming Engine with Async Lookahead Queue
+        # Uses an asyncio.Queue(maxsize=3) so Telegram downloads Chunk N+1 in the background
+        # WHILE Chunk N is actively flushing to the player, eliminating roundtrip idle latency!
+        queue = asyncio.Queue(maxsize=3)
+        producer_done = asyncio.Event()
 
-                worker_yielded_any = False
-                try:
-                    async for chunk in worker_client.stream_media(msg, offset=curr_offset):
-                        worker_yielded_any = True
-                        if is_head_or_tail(curr_offset, total_chunks):
-                            asyncio.create_task(put_cached_chunk(file_code, curr_offset, chunk, total_chunks))
+        async def prefetch_producer():
+            p_offset = curr_offset
+            p_retry = retry_count
+            try:
+                while p_offset < end_chunk and p_retry < MAX_RETRIES:
+                    worker_client = TelegramBot if (p_retry == 0 or not worker_clients) else (get_worker_client() or TelegramBot)
+                    worker_name = getattr(worker_client, 'name', 'bot')
+                    worker_yielded_any = False
 
-                        if bytes_streamed == 0:
-                            trim_start = current_start % chunk_size
-                            if trim_start > 0:
-                                chunk = chunk[trim_start:]
+                    try:
+                        async for chunk in worker_client.stream_media(msg, offset=p_offset):
+                            worker_yielded_any = True
+                            if is_head_or_tail(p_offset, total_chunks):
+                                asyncio.create_task(put_cached_chunk(file_code, p_offset, chunk, total_chunks))
 
-                        rem_bytes = content_length - bytes_streamed
-                        if rem_bytes <= 0:
-                            return
+                            await queue.put((p_offset, chunk))
+                            p_offset += 1
+                            p_retry = 0
 
-                        if len(chunk) > rem_bytes:
-                            chunk = chunk[:rem_bytes]
+                            if p_offset >= end_chunk:
+                                return
 
-                        yield chunk
-                        bytes_streamed += len(chunk)
-                        del chunk
-                        curr_offset += 1
-                        retry_count = 0
+                        if not worker_yielded_any and p_offset < end_chunk:
+                            p_retry += 1
+                            logger.warning('Stream worker %s yielded 0 chunks at %d. Rotating...', worker_name, p_offset)
+                            if hasattr(worker_client, 'media_sessions'):
+                                worker_client.media_sessions.clear()
+                            mark_worker_cooldown(worker_name, 60)
+                            await asyncio.sleep(0.3)
 
-                        if curr_offset % 20 == 0:
-                            check_memory_circuit_breaker()
-
-                        if bytes_streamed >= content_length or curr_offset >= end_chunk:
-                            return
-
-                    # Detect when Hydrogram's get_file swallowed an internal DC error (e.g. 401 AUTH_KEY_UNREGISTERED or Timeout)
-                    # and quietly exited without yielding even 1 chunk
-                    if not worker_yielded_any and curr_offset < end_chunk and bytes_streamed < content_length:
-                        retry_count += 1
-                        logger.warning('Stream worker %s yielded 0 chunks at %d (AuthKey or DC timeout). Resetting sessions and rotating...',
-                                       worker_name, curr_offset)
+                    except (asyncio.CancelledError, GeneratorExit):
+                        return
+                    except Exception as stream_err:
+                        p_retry += 1
+                        err_name = type(stream_err).__name__
+                        logger.warning('Stream worker %s encountered %s at chunk %d (retry %d/%d). Rotating...',
+                                       worker_name, err_name, p_offset, p_retry, MAX_RETRIES)
                         if hasattr(worker_client, 'media_sessions'):
                             worker_client.media_sessions.clear()
-                        mark_worker_cooldown(worker_name, 60)
-                        await asyncio.sleep(0.3)
+                        if any(x in err_name for x in ('ChannelPrivate', 'ChatAdminRequired', 'UserNotParticipant')):
+                            mark_worker_cooldown(worker_name, 600)
+                        elif isinstance(stream_err, FloodWait):
+                            wait_sec = getattr(stream_err, 'value', 30)
+                            mark_worker_cooldown(worker_name, wait_sec)
+                        else:
+                            mark_worker_cooldown(worker_name, 30)
+                        await asyncio.sleep(0.5)
 
-                except (asyncio.CancelledError, GeneratorExit):
-                    raise
-                except Exception as stream_err:
-                    retry_count += 1
-                    err_name = type(stream_err).__name__
-                    logger.warning('Stream worker %s encountered %s at chunk %d (retry %d/%d). Rotating worker...',
-                                   worker_name, err_name, curr_offset, retry_count, MAX_RETRIES)
-                    if hasattr(worker_client, 'media_sessions'):
-                        worker_client.media_sessions.clear()
-                    if any(x in err_name for x in ('ChannelPrivate', 'ChatAdminRequired', 'UserNotParticipant')):
-                        mark_worker_cooldown(worker_name, 600)
-                    elif isinstance(stream_err, FloodWait):
-                        wait_sec = getattr(stream_err, 'value', 30)
-                        mark_worker_cooldown(worker_name, wait_sec)
-                    else:
-                        mark_worker_cooldown(worker_name, 30)
-                    await asyncio.sleep(0.5)
+            except (asyncio.CancelledError, GeneratorExit):
+                pass
+            finally:
+                producer_done.set()
 
+        producer_task = asyncio.create_task(prefetch_producer())
+
+        try:
+            while bytes_streamed < content_length:
+                get_task = asyncio.create_task(queue.get())
+                wait_task = asyncio.create_task(producer_done.wait())
+                done, pending = await asyncio.wait([get_task, wait_task], return_when=asyncio.FIRST_COMPLETED)
+
+                for p in pending:
+                    p.cancel()
+
+                if get_task in done:
+                    ch_offset, chunk = get_task.result()
+                else:
+                    if queue.empty():
+                        break
+                    ch_offset, chunk = await queue.get()
+
+                if bytes_streamed == 0:
+                    trim_start = current_start % chunk_size
+                    if trim_start > 0:
+                        chunk = chunk[trim_start:]
+
+                rem_bytes = content_length - bytes_streamed
+                if rem_bytes <= 0:
+                    break
+
+                if len(chunk) > rem_bytes:
+                    chunk = chunk[:rem_bytes]
+
+                yield chunk
+                bytes_streamed += len(chunk)
+                curr_offset = ch_offset + 1
+                del chunk
+
+                if curr_offset % 20 == 0:
+                    check_memory_circuit_breaker()
+
+                if bytes_streamed >= content_length or curr_offset >= end_chunk:
+                    break
         except (asyncio.CancelledError, GeneratorExit):
             pass
         finally:
+            producer_task.cancel()
+            try:
+                await producer_task
+            except (asyncio.CancelledError, Exception):
+                pass
             if bytes_streamed > 0:
                 await add_bandwidth_bytes(bytes_streamed)
             check_memory_circuit_breaker()
@@ -399,3 +436,21 @@ async def api_get_movies():
             'download_url': f"{Server.BASE_URL}/dl/{code}"
         })
     return jsonify({'status': 'success', 'count': len(movies), 'movies': movies}), 200
+
+@bp.route('/api/version')
+async def api_version():
+    import subprocess
+    commit = 'unknown'
+    try:
+        commit = subprocess.check_output(['git', 'rev-parse', '--short', 'HEAD']).decode().strip()
+    except Exception:
+        pass
+    from bot.clients import worker_clients, TelegramBot
+    workers_info = [getattr(w, 'name', 'bot') for w in worker_clients]
+    return jsonify({
+        'status': 'online',
+        'commit': commit,
+        'primary_bot': getattr(TelegramBot, 'name', 'bot_main'),
+        'total_workers': len(worker_clients),
+        'workers': workers_info
+    }), 200
