@@ -54,20 +54,41 @@ async def prefetch_chunk(file_code: str, chunk_idx: int, total_chunks: int, targ
         _IN_FLIGHT_CHUNKS[key] = evt
 
     try:
-        from bot.clients import get_worker_client, TelegramBot
+        from bot.clients import get_worker_client, TelegramBot, mark_worker_cooldown
         from bot.modules.telegram import get_message
-        worker = get_worker_client() or TelegramBot
-        msg = target_msg
-        if channel_id and message_id:
-            msg = await get_message(channel_id, message_id, client=worker) or target_msg
 
-        if not msg:
-            return
+        clients_to_try = [get_worker_client() or TelegramBot]
+        if TelegramBot not in clients_to_try:
+            clients_to_try.append(TelegramBot)
 
-        async for chunk in worker.stream_media(msg, offset=chunk_idx, limit=1):
-            await put_cached_chunk(file_code, chunk_idx, chunk, total_chunks)
-            logger.info("Detached prefetch saved chunk %d for %s (size %d bytes).", chunk_idx, file_code, len(chunk))
-            break
+        saved = False
+        for worker in clients_to_try:
+            w_name = getattr(worker, 'name', 'bot')
+            msg = target_msg
+            if channel_id and message_id:
+                msg = await get_message(channel_id, message_id, client=worker) or target_msg
+
+            if not msg:
+                continue
+
+            try:
+                async for chunk in worker.stream_media(msg, offset=chunk_idx, limit=1):
+                    await put_cached_chunk(file_code, chunk_idx, chunk, total_chunks)
+                    logger.info("Detached prefetch saved chunk %d for %s (size %d bytes).", chunk_idx, file_code, len(chunk))
+                    saved = True
+                    break
+            except Exception as w_err:
+                logger.debug("Prefetch worker %s failed on chunk %d: %s", w_name, chunk_idx, w_err)
+                if hasattr(worker, 'media_sessions'):
+                    worker.media_sessions.clear()
+                mark_worker_cooldown(w_name, 60)
+
+            if saved:
+                break
+            else:
+                if hasattr(worker, 'media_sessions'):
+                    worker.media_sessions.clear()
+                mark_worker_cooldown(w_name, 60)
     except Exception as e:
         logger.debug("Prefetch background task exception for chunk %d: %s", chunk_idx, e)
     finally:

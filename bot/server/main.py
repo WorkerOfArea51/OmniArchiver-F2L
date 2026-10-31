@@ -232,8 +232,10 @@ async def transmit_file(file_code):
                     await asyncio.sleep(0.5)
                     continue
 
+                worker_yielded_any = False
                 try:
                     async for chunk in worker_client.stream_media(msg, offset=curr_offset):
+                        worker_yielded_any = True
                         if is_head_or_tail(curr_offset, total_chunks):
                             asyncio.create_task(put_cached_chunk(file_code, curr_offset, chunk, total_chunks))
 
@@ -261,6 +263,17 @@ async def transmit_file(file_code):
                         if bytes_streamed >= content_length or curr_offset >= end_chunk:
                             return
 
+                    # Detect when Hydrogram's get_file swallowed an internal DC error (e.g. 401 AUTH_KEY_UNREGISTERED or Timeout)
+                    # and quietly exited without yielding even 1 chunk
+                    if not worker_yielded_any and curr_offset < end_chunk and bytes_streamed < content_length:
+                        retry_count += 1
+                        logger.warning('Stream worker %s yielded 0 chunks at %d (AuthKey or DC timeout). Resetting sessions and rotating...',
+                                       worker_name, curr_offset)
+                        if hasattr(worker_client, 'media_sessions'):
+                            worker_client.media_sessions.clear()
+                        mark_worker_cooldown(worker_name, 60)
+                        await asyncio.sleep(0.3)
+
                 except (asyncio.CancelledError, GeneratorExit):
                     raise
                 except Exception as stream_err:
@@ -268,13 +281,15 @@ async def transmit_file(file_code):
                     err_name = type(stream_err).__name__
                     logger.warning('Stream worker %s encountered %s at chunk %d (retry %d/%d). Rotating worker...',
                                    worker_name, err_name, curr_offset, retry_count, MAX_RETRIES)
+                    if hasattr(worker_client, 'media_sessions'):
+                        worker_client.media_sessions.clear()
                     if any(x in err_name for x in ('ChannelPrivate', 'ChatAdminRequired', 'UserNotParticipant')):
                         mark_worker_cooldown(worker_name, 600)
                     elif isinstance(stream_err, FloodWait):
                         wait_sec = getattr(stream_err, 'value', 30)
                         mark_worker_cooldown(worker_name, wait_sec)
                     else:
-                        mark_worker_cooldown(worker_name, 15)
+                        mark_worker_cooldown(worker_name, 30)
                     await asyncio.sleep(0.5)
 
         except (asyncio.CancelledError, GeneratorExit):
