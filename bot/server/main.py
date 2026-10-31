@@ -230,7 +230,7 @@ async def transmit_file(file_code):
             try:
                 while p_offset < end_chunk and p_retry < MAX_RETRIES:
                     worker_name = getattr(current_worker, 'name', 'bot_main')
-                    worker_yielded_any = False
+                    stream_iter = None
 
                     try:
                         worker_msg = msg
@@ -241,31 +241,19 @@ async def transmit_file(file_code):
                         is_first_chunk = True
 
                         while p_offset < end_chunk:
-                            # 15s timeout for first chunk if auxiliary worker (MTProto DH handshake), 6s for continuous streaming
-                            chunk_timeout = 15.0 if (current_worker != TelegramBot and is_first_chunk) else 6.0
+                            # 15.0s handshake window for the first chunk (allows MTProto DH key exchange), 6.0s for subsequent streaming
+                            chunk_timeout = 15.0 if is_first_chunk else 6.0
                             try:
                                 chunk = await asyncio.wait_for(stream_iter.__anext__(), timeout=chunk_timeout)
                             except StopAsyncIteration:
                                 break
                             except (asyncio.TimeoutError, Exception) as fetch_err:
                                 err_name = type(fetch_err).__name__
-                                logger.warning('Stream worker %s stalled on chunk %d (%s). Failing over...',
+                                logger.warning('Stream worker %s stalled on chunk %d (%s). Rotating...',
                                                worker_name, p_offset, err_name)
-                                if current_worker != TelegramBot:
-                                    # Immediate failover to TelegramBot: mark auxiliary on cooldown, switch permanently to TelegramBot
-                                    mark_worker_cooldown(worker_name, 60)
-                                    current_worker = TelegramBot
-                                    # Break inner loop to restart clean stream_iter with TelegramBot from p_offset
-                                    break
-                                else:
-                                    # Primary bot stalled/rate-limited: mark on cooldown, rotate to auxiliary worker
-                                    mark_worker_cooldown(worker_name, 30)
-                                    current_worker = get_worker_client() or TelegramBot
-                                    # Break inner loop to restart clean stream_iter with worker from p_offset
-                                    break
+                                break
 
                             is_first_chunk = False
-                            worker_yielded_any = True
 
                             if is_head_or_tail(p_offset, total_chunks):
                                 asyncio.create_task(put_cached_chunk(file_code, p_offset, chunk, total_chunks))
@@ -276,13 +264,6 @@ async def transmit_file(file_code):
 
                             if p_offset >= end_chunk:
                                 return
-
-                        if not worker_yielded_any and p_offset < end_chunk:
-                            p_retry += 1
-                            logger.warning('Stream worker %s yielded 0 chunks at %d. Rotating...', worker_name, p_offset)
-                            mark_worker_cooldown(worker_name, 60)
-                            current_worker = TelegramBot if current_worker != TelegramBot else (get_worker_client() or TelegramBot)
-                            await asyncio.sleep(0.3)
 
                     except (asyncio.CancelledError, GeneratorExit):
                         return
@@ -298,8 +279,22 @@ async def transmit_file(file_code):
                             mark_worker_cooldown(worker_name, wait_sec)
                         else:
                             mark_worker_cooldown(worker_name, 30)
-                        current_worker = TelegramBot if current_worker != TelegramBot else (get_worker_client() or TelegramBot)
-                        await asyncio.sleep(0.5)
+                    finally:
+                        if stream_iter is not None:
+                            try:
+                                await stream_iter.aclose()
+                            except Exception:
+                                pass
+
+                    if p_offset < end_chunk:
+                        p_retry += 1
+                        if current_worker != TelegramBot:
+                            mark_worker_cooldown(worker_name, 60)
+                            current_worker = TelegramBot if not is_worker_on_cooldown('bot_main') else (get_worker_client() or TelegramBot)
+                        else:
+                            mark_worker_cooldown(worker_name, 30)
+                            current_worker = get_worker_client() or TelegramBot
+                        await asyncio.sleep(0.3)
 
             except (asyncio.CancelledError, GeneratorExit):
                 pass
@@ -516,9 +511,14 @@ async def api_test_chunk(file_code, chunk_idx):
         worker_msg = msg
         if worker != TelegramBot and channel_id and message_id:
             worker_msg = await get_message(channel_id, message_id, client=worker) or msg
-        async for c in worker.stream_media(worker_msg, offset=chunk_idx, limit=1):
-            chunk_data = c
-            break
+        stream_iter = worker.stream_media(worker_msg, offset=chunk_idx, limit=1).__aiter__()
+        try:
+            chunk_data = await asyncio.wait_for(stream_iter.__anext__(), timeout=20.0)
+        finally:
+            try:
+                await stream_iter.aclose()
+            except Exception:
+                pass
         dt = time.time() - t1
         return jsonify({
             'status': 'ok',
