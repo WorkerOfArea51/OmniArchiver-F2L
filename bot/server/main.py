@@ -6,10 +6,10 @@ from re import match as re_match
 from .error import abort
 from bot.clients import get_worker_client, TelegramBot, mark_worker_cooldown, worker_clients, is_worker_on_cooldown
 from hydrogram.session.session import Session
-Session.START_TIMEOUT = 25.0
-Session.WAIT_TIMEOUT = 45.0
-Session.send.__defaults__ = (True, 45.0)
-Session.invoke.__defaults__ = (Session.MAX_RETRIES, 45.0, Session.SLEEP_THRESHOLD)
+Session.START_TIMEOUT = 25
+Session.WAIT_TIMEOUT = 45
+Session.send.__defaults__ = (True, 45)
+Session.invoke.__defaults__ = (Session.MAX_RETRIES, 45, Session.SLEEP_THRESHOLD)
 from bot.config import Telegram, Server
 from bot.database import db
 from bot.database.files import get_file, add_bandwidth_bytes

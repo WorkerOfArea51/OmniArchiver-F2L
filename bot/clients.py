@@ -8,10 +8,10 @@ from bot.database import db
 logger = getLogger('bot')
 
 # Patch Hydrogram session timeouts for high-latency remote DCs (e.g. DC 5 Singapore with 250ms RTT)
-Session.START_TIMEOUT = 25.0
-Session.WAIT_TIMEOUT = 45.0
-Session.send.__defaults__ = (True, 45.0)
-Session.invoke.__defaults__ = (Session.MAX_RETRIES, 45.0, Session.SLEEP_THRESHOLD)
+Session.START_TIMEOUT = 25
+Session.WAIT_TIMEOUT = 45
+Session.send.__defaults__ = (True, 45)
+Session.invoke.__defaults__ = (Session.MAX_RETRIES, 45, Session.SLEEP_THRESHOLD)
 
 # Main Bot Client (Processes user commands, interactions, and updates)
 TelegramBot = Client(
