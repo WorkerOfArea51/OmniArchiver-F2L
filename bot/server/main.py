@@ -4,7 +4,10 @@ from quart import Blueprint, Response, request, render_template, redirect, jsoni
 from math import ceil
 from re import match as re_match
 from .error import abort
-from bot.clients import get_worker_client, TelegramBot, mark_worker_cooldown, worker_clients, is_worker_on_cooldown
+from bot.clients import (
+    get_worker_client, TelegramBot, mark_worker_cooldown,
+    worker_clients, is_worker_on_cooldown, get_all_worker_clients
+)
 from hydrogram.session.session import Session
 Session.START_TIMEOUT = 25
 Session.WAIT_TIMEOUT = 45
@@ -225,106 +228,86 @@ async def transmit_file(file_code):
             flush_ram()
             return
 
-        # 2. High-Throughput MTProto Streaming Engine with Async Lookahead Queue
-        # Uses an asyncio.Queue(maxsize=3) so Telegram downloads Chunk N+1 in the background
-        # WHILE Chunk N is actively flushing to the player, eliminating roundtrip idle latency!
-        END_SENTINEL = object()
-        queue = asyncio.Queue(maxsize=3)
+        # 2. Parallel Multi-Worker Lookahead Streaming Engine
+        # -------------------------------------------------------------------------
+        # Maintains a sliding window of CONCURRENCY parallel chunk downloads across
+        # healthy worker bots. When Chunk N is being delivered to the video player,
+        # Chunks N+1, N+2, N+3 are actively pre-fetching over independent MTProto sockets!
+        # Eliminates cross-continental RTT bottlenecks, keeping player buffer 100% full.
+        # -------------------------------------------------------------------------
+        CONCURRENCY = 4
 
-        async def prefetch_producer():
-            p_offset = curr_offset
-            p_retry = 0
+        async def fetch_chunk_data(target_chunk_idx: int) -> bytes:
+            cached = await get_cached_chunk(file_code, target_chunk_idx, wait_in_flight=False)
+            if cached is not None:
+                return cached
 
-            # TelegramBot is the primary client with persistent MTProto media sessions (0ms cold start).
-            # If TelegramBot is temporarily on cooldown (FloodWait), fallback to auxiliary worker pool.
-            current_worker = TelegramBot
-            if is_worker_on_cooldown(getattr(TelegramBot, 'name', 'bot_main')):
-                current_worker = get_worker_client() or TelegramBot
+            # Filter healthy workers from pool
+            all_pool = get_all_worker_clients() or [TelegramBot]
+            healthy = [w for w in all_pool if not is_worker_on_cooldown(getattr(w, 'name', ''))]
+            if not healthy:
+                healthy = [TelegramBot]
 
-            try:
-                while p_offset < end_chunk and p_retry < MAX_RETRIES:
-                    worker_name = getattr(current_worker, 'name', 'bot_main')
-                    stream_iter = None
+            # Assign worker deterministically by chunk index for connection session affinity
+            primary_worker = healthy[target_chunk_idx % len(healthy)]
 
-                    try:
-                        worker_msg = msg
-                        if current_worker != TelegramBot and channel_id and message_id:
-                            worker_msg = await get_message(channel_id, message_id, client=current_worker) or msg
+            for attempt in range(4):
+                current_worker = primary_worker if attempt == 0 else healthy[(target_chunk_idx + attempt) % len(healthy)]
+                worker_name = getattr(current_worker, 'name', 'bot_main')
+                stream_iter = None
+                try:
+                    w_msg = msg
+                    if current_worker != TelegramBot and channel_id and message_id:
+                        w_msg = await get_message(channel_id, message_id, client=current_worker) or msg
 
-                        stream_iter = current_worker.stream_media(worker_msg, offset=p_offset).__aiter__()
-                        is_first_chunk = True
+                    stream_iter = current_worker.stream_media(w_msg, offset=target_chunk_idx, limit=1).__aiter__()
+                    chunk = await asyncio.wait_for(stream_iter.__anext__(), timeout=60.0)
+                    if chunk:
+                        if is_head_or_tail(target_chunk_idx, total_chunks):
+                            asyncio.create_task(put_cached_chunk(file_code, target_chunk_idx, chunk, total_chunks))
+                        return chunk
+                except (asyncio.CancelledError, GeneratorExit):
+                    raise
+                except Exception as e:
+                    err_name = type(e).__name__
+                    logger.warning('Worker %s failed on chunk %d (attempt %d/%d): %s',
+                                   worker_name, target_chunk_idx, attempt + 1, 4, err_name)
+                    mark_worker_cooldown(worker_name, 30)
+                    healthy = [w for w in all_pool if not is_worker_on_cooldown(getattr(w, 'name', ''))] or [TelegramBot]
+                    await asyncio.sleep(0.3)
+                finally:
+                    if stream_iter is not None:
+                        try:
+                            await stream_iter.aclose()
+                        except Exception:
+                            pass
 
-                        while p_offset < end_chunk:
-                            # Generous 45.0s timeout per chunk: allows MTProto DH handshake and transatlantic/transpacific latency without premature stall cancellation
-                            try:
-                                chunk = await asyncio.wait_for(stream_iter.__anext__(), timeout=45.0)
-                            except StopAsyncIteration:
-                                break
-                            except (asyncio.TimeoutError, Exception) as fetch_err:
-                                err_name = type(fetch_err).__name__
-                                logger.warning('Stream worker %s stalled on chunk %d (%s). Rotating...',
-                                               worker_name, p_offset, err_name)
-                                break
+            raise RuntimeError(f'All workers failed to retrieve chunk {target_chunk_idx}')
 
-                            if is_head_or_tail(p_offset, total_chunks):
-                                asyncio.create_task(put_cached_chunk(file_code, p_offset, chunk, total_chunks))
+        in_flight: dict[int, asyncio.Task] = {}
+        next_to_schedule = curr_offset
 
-                            await queue.put((p_offset, chunk))
-                            p_offset += 1
-                            p_retry = 0
-
-                            if p_offset >= end_chunk:
-                                return
-
-                    except (asyncio.CancelledError, GeneratorExit):
-                        return
-                    except Exception as stream_err:
-                        p_retry += 1
-                        err_name = type(stream_err).__name__
-                        logger.warning('Stream worker %s encountered %s at chunk %d (retry %d/%d). Rotating...',
-                                       worker_name, err_name, p_offset, p_retry, MAX_RETRIES)
-                        if any(x in err_name for x in ('ChannelPrivate', 'ChatAdminRequired', 'UserNotParticipant')):
-                            mark_worker_cooldown(worker_name, 600)
-                        elif isinstance(stream_err, FloodWait):
-                            wait_sec = getattr(stream_err, 'value', 30)
-                            mark_worker_cooldown(worker_name, wait_sec)
-                        elif current_worker != TelegramBot:
-                            mark_worker_cooldown(worker_name, 30)
-                        elif p_retry >= 2:
-                            mark_worker_cooldown(worker_name, 30)
-                    finally:
-                        if stream_iter is not None:
-                            try:
-                                await stream_iter.aclose()
-                            except Exception:
-                                pass
-
-                    if p_offset < end_chunk:
-                        p_retry += 1
-                        if current_worker != TelegramBot:
-                            mark_worker_cooldown(worker_name, 60)
-                            current_worker = TelegramBot if not is_worker_on_cooldown('bot_main') else (get_worker_client() or TelegramBot)
-                        else:
-                            if p_retry >= 2:
-                                mark_worker_cooldown(worker_name, 30)
-                                current_worker = get_worker_client() or TelegramBot
-                            else:
-                                logger.info('Retrying chunk %d with primary TelegramBot (attempt %d)...', p_offset, p_retry)
-                        await asyncio.sleep(0.3)
-
-            except (asyncio.CancelledError, GeneratorExit):
-                pass
-            finally:
-                await queue.put(END_SENTINEL)
-
-        producer_task = asyncio.create_task(prefetch_producer())
+        # Prime the sliding window with CONCURRENCY chunk downloads:
+        while next_to_schedule < end_chunk and len(in_flight) < CONCURRENCY:
+            in_flight[next_to_schedule] = asyncio.create_task(fetch_chunk_data(next_to_schedule))
+            next_to_schedule += 1
 
         try:
-            while bytes_streamed < content_length:
-                item = await queue.get()
-                if item is END_SENTINEL:
-                    break
-                ch_offset, chunk = item
+            while curr_offset < end_chunk and bytes_streamed < content_length:
+                task = in_flight.get(curr_offset)
+                if not task:
+                    task = asyncio.create_task(fetch_chunk_data(curr_offset))
+                    in_flight[curr_offset] = task
+
+                try:
+                    chunk = await task
+                finally:
+                    in_flight.pop(curr_offset, None)
+
+                # Keep sliding window full
+                while next_to_schedule < end_chunk and len(in_flight) < CONCURRENCY:
+                    in_flight[next_to_schedule] = asyncio.create_task(fetch_chunk_data(next_to_schedule))
+                    next_to_schedule += 1
 
                 if bytes_streamed == 0:
                     trim_start = current_start % chunk_size
@@ -334,28 +317,25 @@ async def transmit_file(file_code):
                 rem_bytes = content_length - bytes_streamed
                 if rem_bytes <= 0:
                     break
-
                 if len(chunk) > rem_bytes:
                     chunk = chunk[:rem_bytes]
 
                 yield chunk
                 bytes_streamed += len(chunk)
-                curr_offset = ch_offset + 1
                 del chunk
+                curr_offset += 1
 
                 if curr_offset % 20 == 0:
                     check_memory_circuit_breaker()
 
-                if bytes_streamed >= content_length or curr_offset >= end_chunk:
+                if bytes_streamed >= content_length:
                     break
         except (asyncio.CancelledError, GeneratorExit):
             pass
         finally:
-            producer_task.cancel()
-            try:
-                await producer_task
-            except (asyncio.CancelledError, Exception):
-                pass
+            for t in in_flight.values():
+                if not t.done():
+                    t.cancel()
             if bytes_streamed > 0:
                 await add_bandwidth_bytes(bytes_streamed)
             check_memory_circuit_breaker()
