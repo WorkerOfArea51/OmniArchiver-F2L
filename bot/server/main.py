@@ -118,6 +118,15 @@ async def transmit_file(file_code):
 
     total_bytes_to_stream = end - start + 1
     content_length = total_bytes_to_stream
+
+    # If the requested range requires uncached chunks from Telegram, resolve the message BEFORE sending headers
+    start_chunk = start // chunk_size
+    if not is_chunk_cached(file_code, start_chunk):
+        msg = await get_target_msg()
+        if not msg:
+            msg = await get_message(channel_id, message_id, client=TelegramBot, force_refresh=True)
+        if not msg:
+            abort(503, 'Media message temporarily unavailable from Telegram.')
     # Ensure a valid video MIME type so browsers stream inline instead of forcing a download
     if not mime_type or mime_type == 'application/octet-stream':
         if file_name and file_name.lower().endswith('.mkv'):
@@ -459,6 +468,7 @@ async def api_get_movies():
     return jsonify({'status': 'success', 'count': len(movies), 'movies': movies}), 200
 
 @bp.route('/api/debug_file/<string:file_code>')
+@bp.route('/stream/debug_file/<string:file_code>')
 async def api_debug_file(file_code):
     import time
     import socket
@@ -520,6 +530,7 @@ async def api_debug_file(file_code):
         return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
 
 @bp.route('/api/version')
+@bp.route('/stream/version')
 async def api_version():
     import subprocess
     commit = 'unknown'
@@ -538,6 +549,7 @@ async def api_version():
     }), 200
 
 @bp.route('/api/debug_logs')
+@bp.route('/stream/debug_logs')
 async def api_debug_logs():
     import os
     lines = []
@@ -552,6 +564,7 @@ async def api_debug_logs():
     return Response("\n\n".join(lines) if lines else "No log files found", mimetype='text/plain')
 
 @bp.route('/api/test_chunk/<string:file_code>/<int:chunk_idx>')
+@bp.route('/stream/test_chunk/<string:file_code>/<int:chunk_idx>')
 async def api_test_chunk(file_code, chunk_idx):
     import time
     import traceback

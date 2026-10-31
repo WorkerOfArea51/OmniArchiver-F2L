@@ -52,7 +52,7 @@ async def get_message(chat_id: int | str, message_id: int, client: Client = None
     message = None
 
     try:
-        message = await asyncio.wait_for(target_client.get_messages(chat_id=chat_id, message_ids=message_id), timeout=3.5)
+        message = await asyncio.wait_for(target_client.get_messages(chat_id=chat_id, message_ids=message_id), timeout=15.0)
         if message and message.empty:
             message = None
     except Exception as e:
@@ -60,8 +60,8 @@ async def get_message(chat_id: int | str, message_id: int, client: Client = None
             mark_worker_cooldown(client_name, getattr(e, 'value', 30))
         # If worker client does not have peer in memory, resolve chat and retry get_messages
         try:
-            await asyncio.wait_for(target_client.get_chat(chat_id), timeout=2.5)
-            message = await asyncio.wait_for(target_client.get_messages(chat_id=chat_id, message_ids=message_id), timeout=3.0)
+            await asyncio.wait_for(target_client.get_chat(chat_id), timeout=10.0)
+            message = await asyncio.wait_for(target_client.get_messages(chat_id=chat_id, message_ids=message_id), timeout=15.0)
             if message and message.empty:
                 message = None
         except Exception:
@@ -73,7 +73,7 @@ async def get_message(chat_id: int | str, message_id: int, client: Client = None
                 target_client = TelegramBot
                 client_name = getattr(target_client, 'name', 'bot')
                 cache_key = (client_name, chat_id, message_id)
-                message = await asyncio.wait_for(TelegramBot.get_messages(chat_id=chat_id, message_ids=message_id), timeout=3.5)
+                message = await asyncio.wait_for(TelegramBot.get_messages(chat_id=chat_id, message_ids=message_id), timeout=15.0)
                 if message and message.empty:
                     message = None
             except Exception:

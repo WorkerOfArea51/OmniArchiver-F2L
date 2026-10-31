@@ -118,6 +118,10 @@ LOGGER_CONFIG_JSON = {
         'hydrogram': {
             'level': 'WARNING',
             'handlers': ['file_handler', 'stream_handler']
+        },
+        'server': {
+            'level': 'INFO',
+            'handlers': ['file_handler', 'stream_handler']
         }
     }
 }
