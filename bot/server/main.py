@@ -4,7 +4,12 @@ from quart import Blueprint, Response, request, render_template, redirect, jsoni
 from math import ceil
 from re import match as re_match
 from .error import abort
-from bot.clients import get_worker_client, TelegramBot, mark_worker_cooldown, worker_clients, is_worker_on_cooldown
+from bot.clients import get_worker_client, TelegramBot, mark_worker_cooldown, worker_clients, is_worker_on_cooldown, warm_media_session
+from hydrogram.session.session import Session
+Session.START_TIMEOUT = 25.0
+Session.WAIT_TIMEOUT = 45.0
+Session.send.__defaults__ = (True, 45.0)
+Session.invoke.__defaults__ = (Session.MAX_RETRIES, 45.0, Session.SLEEP_THRESHOLD)
 from bot.config import Telegram, Server
 from bot.database import db
 from bot.database.files import get_file, add_bandwidth_bytes
@@ -241,9 +246,9 @@ async def transmit_file(file_code):
                         is_first_chunk = True
 
                         while p_offset < end_chunk:
-                            # Generous 25.0s timeout per chunk: allows MTProto DH handshake and transatlantic/transpacific latency without premature stall cancellation
+                            # Generous 45.0s timeout per chunk: allows MTProto DH handshake and transatlantic/transpacific latency without premature stall cancellation
                             try:
-                                chunk = await asyncio.wait_for(stream_iter.__anext__(), timeout=25.0)
+                                chunk = await asyncio.wait_for(stream_iter.__anext__(), timeout=45.0)
                             except StopAsyncIteration:
                                 break
                             except (asyncio.TimeoutError, Exception) as fetch_err:
@@ -274,7 +279,9 @@ async def transmit_file(file_code):
                         elif isinstance(stream_err, FloodWait):
                             wait_sec = getattr(stream_err, 'value', 30)
                             mark_worker_cooldown(worker_name, wait_sec)
-                        else:
+                        elif current_worker != TelegramBot:
+                            mark_worker_cooldown(worker_name, 30)
+                        elif p_retry >= 2:
                             mark_worker_cooldown(worker_name, 30)
                     finally:
                         if stream_iter is not None:
@@ -289,8 +296,11 @@ async def transmit_file(file_code):
                             mark_worker_cooldown(worker_name, 60)
                             current_worker = TelegramBot if not is_worker_on_cooldown('bot_main') else (get_worker_client() or TelegramBot)
                         else:
-                            mark_worker_cooldown(worker_name, 30)
-                            current_worker = get_worker_client() or TelegramBot
+                            if p_retry >= 2:
+                                mark_worker_cooldown(worker_name, 30)
+                                current_worker = get_worker_client() or TelegramBot
+                            else:
+                                logger.info('Retrying chunk %d with primary TelegramBot (attempt %d)...', p_offset, p_retry)
                         await asyncio.sleep(0.3)
 
             except (asyncio.CancelledError, GeneratorExit):
@@ -509,6 +519,18 @@ async def api_debug_file(file_code):
         import traceback
         return jsonify({'error': str(e), 'traceback': traceback.format_exc()}), 500
 
+@bp.route('/api/warm_dc/<int:dc_id>')
+async def api_warm_dc(dc_id):
+    import time
+    t0 = time.time()
+    session = await warm_media_session(TelegramBot, dc_id)
+    return jsonify({
+        'status': 'ok' if session else 'failed',
+        'dc_id': dc_id,
+        'elapsed': round(time.time() - t0, 2),
+        'media_sessions_active': list(TelegramBot.media_sessions.keys())
+    }), 200
+
 @bp.route('/api/version')
 async def api_version():
     import subprocess
@@ -571,7 +593,7 @@ async def api_test_chunk(file_code, chunk_idx):
             worker_msg = await get_message(channel_id, message_id, client=worker) or msg
         stream_iter = worker.stream_media(worker_msg, offset=chunk_idx, limit=1).__aiter__()
         try:
-            chunk_data = await asyncio.wait_for(stream_iter.__anext__(), timeout=20.0)
+            chunk_data = await asyncio.wait_for(stream_iter.__anext__(), timeout=45.0)
         finally:
             try:
                 await stream_iter.aclose()

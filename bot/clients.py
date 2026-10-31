@@ -1,10 +1,76 @@
 from hydrogram import Client
+from hydrogram.session.session import Session
 from logging import getLogger
 from itertools import cycle
 from bot.config import Telegram
 from bot.database import db
 
 logger = getLogger('bot')
+
+# Patch Hydrogram session timeouts for high-latency remote DCs (e.g. DC 5 Singapore with software AES)
+Session.START_TIMEOUT = 25.0
+Session.WAIT_TIMEOUT = 45.0
+Session.send.__defaults__ = (True, 45.0)
+Session.invoke.__defaults__ = (Session.MAX_RETRIES, 45.0, Session.SLEEP_THRESHOLD)
+
+# Wrap Client.get_file to auto-evict stopped/dead media sessions so they are cleanly recreated
+_orig_get_file = Client.get_file
+
+async def _patched_get_file(self, file_id, file_size=0, limit=0, offset=0, progress=None, progress_args=()):
+    dc_id = getattr(file_id, 'dc_id', None)
+    if dc_id:
+        session = self.media_sessions.get(dc_id)
+        if session is not None and (not getattr(session, 'is_started', None) or not session.is_started.is_set()):
+            self.media_sessions.pop(dc_id, None)
+    async for chunk in _orig_get_file(self, file_id, file_size, limit, offset, progress, progress_args):
+        yield chunk
+
+Client.get_file = _patched_get_file
+
+async def warm_media_session(client: Client, dc_id: int):
+    """Proactively connects and authenticates MTProto media session for a remote DC."""
+    if not client or not getattr(client, 'is_connected', False):
+        return None
+    session = client.media_sessions.get(dc_id)
+    if session is not None and getattr(session, 'is_started', None) and session.is_started.is_set():
+        return session
+    try:
+        from hydrogram.session import Session, Auth
+        from hydrogram import raw
+        from hydrogram.errors import AuthBytesInvalid
+
+        test_mode = await client.storage.test_mode()
+        primary_dc = await client.storage.dc_id()
+
+        auth_key = (
+            await Auth(client, dc_id, test_mode).create()
+            if dc_id != primary_dc
+            else await client.storage.auth_key()
+        )
+        session = client.media_sessions[dc_id] = Session(
+            client, dc_id, auth_key, test_mode, is_media=True
+        )
+        await session.start()
+
+        if dc_id != primary_dc:
+            for _ in range(3):
+                exported_auth = await client.invoke(
+                    raw.functions.auth.ExportAuthorization(dc_id=dc_id)
+                )
+                try:
+                    await session.invoke(
+                        raw.functions.auth.ImportAuthorization(
+                            id=exported_auth.id, bytes=exported_auth.bytes
+                        )
+                    )
+                    break
+                except AuthBytesInvalid:
+                    continue
+        logger.info("Media session for DC %d pre-warmed and authenticated on %s.", dc_id, getattr(client, 'name', 'bot'))
+        return session
+    except Exception as e:
+        logger.warning("Failed to pre-warm media session for DC %d on %s: %s", dc_id, getattr(client, 'name', 'bot'), e)
+        return None
 
 # Main Bot Client (Processes user commands, interactions, and updates)
 TelegramBot = Client(
@@ -171,6 +237,12 @@ async def start_all_clients():
                 except Exception:
                     pass
         logger.info("Storage channel peers pre-warmed across all workers.")
+
+        # Proactively pre-warm DC 5 (Singapore) media session on primary bot
+        try:
+            await warm_media_session(TelegramBot, dc_id=5)
+        except Exception as e:
+            logger.warning("DC 5 pre-warm error: %s", e)
 
     import asyncio
     asyncio.create_task(_prewarm_channels())
