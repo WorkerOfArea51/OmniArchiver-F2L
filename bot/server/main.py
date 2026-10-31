@@ -222,12 +222,16 @@ async def transmit_file(file_code):
             p_retry = retry_count
             try:
                 while p_offset < end_chunk and p_retry < MAX_RETRIES:
-                    worker_client = TelegramBot if (p_retry >= 2 or not worker_clients) else (get_worker_client() or TelegramBot)
+                    worker_client = TelegramBot if (p_retry >= 1 or not worker_clients) else (get_worker_client() or TelegramBot)
                     worker_name = getattr(worker_client, 'name', 'bot')
                     worker_yielded_any = False
 
                     try:
-                        async for chunk in worker_client.stream_media(msg, offset=p_offset):
+                        worker_msg = msg
+                        if worker_client != TelegramBot and channel_id and message_id:
+                            worker_msg = await get_message(channel_id, message_id, client=worker_client) or msg
+
+                        async for chunk in worker_client.stream_media(worker_msg, offset=p_offset):
                             worker_yielded_any = True
                             if is_head_or_tail(p_offset, total_chunks):
                                 asyncio.create_task(put_cached_chunk(file_code, p_offset, chunk, total_chunks))
@@ -440,6 +444,7 @@ async def api_version():
 
 @bp.route('/api/debug_logs')
 async def api_debug_logs():
+    import os
     lines = []
     for log_name in ('bot.log', 'event-log.txt', 'watchdog.log'):
         if os.path.exists(log_name):
@@ -450,3 +455,46 @@ async def api_debug_logs():
             except Exception as e:
                 lines.append(f"Error reading {log_name}: {e}")
     return Response("\n\n".join(lines) if lines else "No log files found", mimetype='text/plain')
+
+@bp.route('/api/test_chunk/<string:file_code>/<int:chunk_idx>')
+async def api_test_chunk(file_code, chunk_idx):
+    import time
+    import traceback
+    t0 = time.time()
+    try:
+        doc = await get_file(file_code)
+        if not doc:
+            return jsonify({'error': 'doc not found'}), 404
+        channel_id = doc.get('channel_id')
+        message_id = doc.get('message_id')
+        msg = await get_message(channel_id, message_id, client=TelegramBot)
+        if not msg:
+            return jsonify({'error': 'msg not found'}), 404
+
+        worker = get_worker_client() or TelegramBot
+        w_name = getattr(worker, 'name', 'bot')
+        t1 = time.time()
+        chunk_data = None
+        worker_msg = msg
+        if worker != TelegramBot and channel_id and message_id:
+            worker_msg = await get_message(channel_id, message_id, client=worker) or msg
+        async for c in worker.stream_media(worker_msg, offset=chunk_idx, limit=1):
+            chunk_data = c
+            break
+        dt = time.time() - t1
+        return jsonify({
+            'status': 'ok',
+            'worker': w_name,
+            'chunk_idx': chunk_idx,
+            'chunk_len': len(chunk_data) if chunk_data else 0,
+            'time_sec': round(dt, 2),
+            'total_time': round(time.time() - t0, 2)
+        }), 200
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'error': str(e),
+            'error_type': type(e).__name__,
+            'traceback': traceback.format_exc(),
+            'total_time': round(time.time() - t0, 2)
+        }), 500
