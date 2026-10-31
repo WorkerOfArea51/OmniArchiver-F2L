@@ -451,6 +451,8 @@ async def api_get_movies():
 @bp.route('/api/debug_file/<string:file_code>')
 async def api_debug_file(file_code):
     import time
+    import socket
+    from hydrogram.file_id import FileId
     t0 = time.time()
     try:
         doc = await get_file(file_code)
@@ -476,14 +478,20 @@ async def api_debug_file(file_code):
         media = getattr(msg, 'video', None) or getattr(msg, 'document', None)
         file_name = getattr(media, 'file_name', '')
         file_size = getattr(media, 'file_size', 0)
-        dc_id = getattr(media, 'dc_id', None)
+        file_id_str = getattr(media, 'file_id', '')
+        decoded = FileId.decode(file_id_str) if file_id_str else None
+        dc_id = getattr(decoded, 'dc_id', None)
 
-        w1_msg = None
-        if len(worker_clients) > 1:
+        dc_reachability = {}
+        for d, ip in [(1, "149.154.175.53"), (2, "149.154.167.51"), (4, "149.154.167.91"), (5, "91.108.56.130")]:
             try:
-                w1_msg = await get_message(channel_id, message_id, client=worker_clients[1])
+                s = socket.create_connection((ip, 443), timeout=1.5)
+                s.close()
+                dc_reachability[d] = "OK"
             except Exception as e:
-                w1_msg = str(e)
+                dc_reachability[d] = f"FAILED: {e}"
+
+        media_sessions_active = list(TelegramBot.media_sessions.keys())
 
         return jsonify({
             'status': 'ok',
@@ -492,9 +500,9 @@ async def api_debug_file(file_code):
             'file_name': file_name,
             'file_size': file_size,
             'dc_id': dc_id,
+            'dc_reachability': dc_reachability,
+            'media_sessions_active': media_sessions_active,
             'resolve_time': dt_resolve,
-            'w1_msg_found': w1_msg is not None and not isinstance(w1_msg, str),
-            'w1_status': str(w1_msg) if isinstance(w1_msg, str) else 'found',
             'total_time': round(time.time() - t0, 2)
         }), 200
     except Exception as e:
