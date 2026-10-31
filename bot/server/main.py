@@ -152,18 +152,10 @@ async def transmit_file(file_code):
 
         curr_offset = offset
         curr_chunks_needed = chunks_needed
-
-        # Proactively trigger detached background pre-fetch of both Head and Tail if opening chunk 0
-        if offset == 0:
-            if not is_chunk_cached(file_code, 0):
-                asyncio.create_task(prefetch_head_chunk(file_code, total_chunks, target_msg=file_msg, channel_id=channel_id, message_id=message_id))
-            pass
-
-
         # 1. Fast Path: Serve any consecutive leading chunks from Head & Tail SSD cache (0.5ms response time)
         # Supports in-flight waiting if chunk is currently being pre-cached by a worker!
         while curr_chunks_needed > 0:
-            cached_data = await get_cached_chunk(file_code, curr_offset, wait_in_flight=True)
+            cached_data = await get_cached_chunk(file_code, curr_offset, wait_in_flight=False)
             if cached_data is None:
                 break
 
@@ -222,15 +214,15 @@ async def transmit_file(file_code):
         # 2. High-Throughput MTProto Streaming Engine with Async Lookahead Queue
         # Uses an asyncio.Queue(maxsize=3) so Telegram downloads Chunk N+1 in the background
         # WHILE Chunk N is actively flushing to the player, eliminating roundtrip idle latency!
+        END_SENTINEL = object()
         queue = asyncio.Queue(maxsize=3)
-        producer_done = asyncio.Event()
 
         async def prefetch_producer():
             p_offset = curr_offset
             p_retry = retry_count
             try:
                 while p_offset < end_chunk and p_retry < MAX_RETRIES:
-                    worker_client = TelegramBot if (p_retry == 0 or not worker_clients) else (get_worker_client() or TelegramBot)
+                    worker_client = TelegramBot if (p_retry >= 2 or not worker_clients) else (get_worker_client() or TelegramBot)
                     worker_name = getattr(worker_client, 'name', 'bot')
                     worker_yielded_any = False
 
@@ -276,25 +268,16 @@ async def transmit_file(file_code):
             except (asyncio.CancelledError, GeneratorExit):
                 pass
             finally:
-                producer_done.set()
+                await queue.put(END_SENTINEL)
 
         producer_task = asyncio.create_task(prefetch_producer())
 
         try:
             while bytes_streamed < content_length:
-                get_task = asyncio.create_task(queue.get())
-                wait_task = asyncio.create_task(producer_done.wait())
-                done, pending = await asyncio.wait([get_task, wait_task], return_when=asyncio.FIRST_COMPLETED)
-
-                for p in pending:
-                    p.cancel()
-
-                if get_task in done:
-                    ch_offset, chunk = get_task.result()
-                else:
-                    if queue.empty():
-                        break
-                    ch_offset, chunk = await queue.get()
+                item = await queue.get()
+                if item is END_SENTINEL:
+                    break
+                ch_offset, chunk = item
 
                 if bytes_streamed == 0:
                     trim_start = current_start % chunk_size
@@ -454,3 +437,16 @@ async def api_version():
         'total_workers': len(worker_clients),
         'workers': workers_info
     }), 200
+
+@bp.route('/api/debug_logs')
+async def api_debug_logs():
+    lines = []
+    for log_name in ('bot.log', 'event-log.txt', 'watchdog.log'):
+        if os.path.exists(log_name):
+            try:
+                with open(log_name, 'r', encoding='utf-8', errors='ignore') as f:
+                    c = f.readlines()
+                    lines.append(f"=== {log_name} (last 40 lines) ===\n" + "".join(c[-40:]))
+            except Exception as e:
+                lines.append(f"Error reading {log_name}: {e}")
+    return Response("\n\n".join(lines) if lines else "No log files found", mimetype='text/plain')
