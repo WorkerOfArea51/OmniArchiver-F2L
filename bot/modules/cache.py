@@ -20,15 +20,15 @@ _INITIALIZED = False
 
 def is_head_or_tail(chunk_idx: int, total_chunks: int) -> bool:
     """
-    Returns True if chunk_idx belongs to the head (first 4 MB: EBML header/codecs/opening buffer)
-    or tail (last 2 MB: Matroska Cues seek index / MP4 moov atom).
-    Only these critical seek chunks are cached to protect disk space.
+    Returns True if chunk_idx belongs to the head (first 10 MB: EBML header/codecs/opening buffer)
+    or tail (last 4 MB: Matroska Cues, Tracks, SeekHead / MP4 moov atom).
+    Strictly capped within MAX_CACHE_BYTES (500 MB) with LRU automatic eviction.
     """
-    # First 4 MB (chunks 0, 1, 2, 3) gives an instant 20-30s opening video buffer
-    if chunk_idx < 4:
+    # First 10 MB (chunks 0-9) gives an instant 45-60s opening video buffer in ExoPlayer/StreamHub
+    if chunk_idx < 10:
         return True
-    # Last 2 MB covers all Matroska Cues and MP4 index atoms
-    if total_chunks > 0 and chunk_idx >= max(0, total_chunks - 2):
+    # Last 4 MB covers all Matroska Cues, Tracks, SeekHead, and MP4 moov index atoms
+    if total_chunks > 0 and chunk_idx >= max(0, total_chunks - 4):
         return True
     return False
 
@@ -80,11 +80,11 @@ async def prefetch_head_chunk(file_code: str, total_chunks: int, target_msg=None
     await prefetch_chunk(file_code, 0, total_chunks, target_msg, channel_id, message_id)
 
 async def prefetch_tail_chunk(file_code: str, total_chunks: int, target_msg=None, channel_id: int | str = None, message_id: int = None):
-    """Detached un-cancellable prefetcher for EOF tail chunk (Matroska Cues)."""
-    if total_chunks <= 4:
+    """Detached un-cancellable prefetcher for EOF tail chunks (Matroska Tracks & Cues)."""
+    if total_chunks <= 10:
         return
-    tail_idx = total_chunks - 1
-    await prefetch_chunk(file_code, tail_idx, total_chunks, target_msg, channel_id, message_id)
+    for tail_idx in range(max(0, total_chunks - 4), total_chunks):
+        await prefetch_chunk(file_code, tail_idx, total_chunks, target_msg, channel_id, message_id)
 
 def init_cache():
     """Initializes the local SSD chunk cache directory and scans existing chunks into LRU index."""
