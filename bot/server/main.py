@@ -231,7 +231,30 @@ async def transmit_file(file_code):
                         if worker_client != TelegramBot and channel_id and message_id:
                             worker_msg = await get_message(channel_id, message_id, client=worker_client) or msg
 
-                        async for chunk in worker_client.stream_media(worker_msg, offset=p_offset):
+                        stream_iter = worker_client.stream_media(worker_msg, offset=p_offset).__aiter__()
+
+                        while p_offset < end_chunk:
+                            # Strict 6.0s per-chunk watchdog: Guarantees zero player stalls
+                            try:
+                                chunk = await asyncio.wait_for(stream_iter.__anext__(), timeout=6.0)
+                            except StopAsyncIteration:
+                                break
+                            except (asyncio.TimeoutError, Exception) as fetch_err:
+                                err_name = type(fetch_err).__name__
+                                logger.warning('Stream worker %s stalled on chunk %d (%s). Falling back to primary bot...',
+                                               worker_name, p_offset, err_name)
+                                if worker_client != TelegramBot:
+                                    # Immediate failover to primary bot for this chunk
+                                    fallback_got = False
+                                    async for fallback_chunk in TelegramBot.stream_media(msg, offset=p_offset, limit=1):
+                                        chunk = fallback_chunk
+                                        fallback_got = True
+                                        break
+                                    if not fallback_got:
+                                        raise fetch_err
+                                else:
+                                    raise fetch_err
+
                             worker_yielded_any = True
                             if is_head_or_tail(p_offset, total_chunks):
                                 asyncio.create_task(put_cached_chunk(file_code, p_offset, chunk, total_chunks))

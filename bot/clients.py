@@ -154,6 +154,22 @@ async def start_all_clients():
         except Exception as e:
             logger.warning("Failed to start worker client #%d: %s", idx, e)
 
+    # Detached background pre-warming of storage channels across all workers
+    async def _prewarm_channels():
+        storage_channels = [-1004421932120, -1002633457020]
+        if Telegram.CHANNEL_ID:
+            storage_channels.append(Telegram.CHANNEL_ID)
+        for w in worker_clients:
+            for ch in storage_channels:
+                try:
+                    await asyncio.wait_for(w.get_chat(ch), timeout=3.0)
+                except Exception:
+                    pass
+        logger.info("Storage channel peers pre-warmed across all workers.")
+
+    import asyncio
+    asyncio.create_task(_prewarm_channels())
+
 def get_all_worker_clients() -> list[Client]:
     """Returns a list of all active worker clients (including TelegramBot as worker 0)."""
     return list(worker_clients)
