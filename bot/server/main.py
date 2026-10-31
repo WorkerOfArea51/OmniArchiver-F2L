@@ -207,30 +207,26 @@ async def transmit_file(file_code):
         retry_count = 0
         MAX_RETRIES = 12
 
+        # Resolve target media message once using TelegramBot (avoid per-chunk Telegram API spam)
+        try:
+            msg = await get_target_msg()
+        except Exception as e:
+            logger.error("Failed to resolve message for %s: %s", file_code, e)
+            msg = None
+
+        if not msg:
+            logger.warning("Could not retrieve media message for %s from channel", file_code)
+            flush_ram()
+            return
+
         try:
             while curr_offset < end_chunk and bytes_streamed < content_length and retry_count < MAX_RETRIES:
-                worker_client = get_worker_client() or TelegramBot
+                # If workers are failing or on cooldown, immediately use primary TelegramBot
+                if retry_count >= 2:
+                    worker_client = TelegramBot
+                else:
+                    worker_client = get_worker_client() or TelegramBot
                 worker_name = getattr(worker_client, 'name', 'bot')
-
-                try:
-                    msg = await get_message(channel_id, message_id, client=worker_client)
-                    if not msg and worker_client != TelegramBot:
-                        worker_client = TelegramBot
-                        worker_name = 'TelegramBot'
-                        msg = await get_message(channel_id, message_id, client=TelegramBot)
-                    if not msg:
-                        logger.warning('Could not retrieve message for %s at chunk %d', file_code, curr_offset)
-                        break
-                    # Ensure streaming client strictly matches the client with channel access
-                    if getattr(msg, '_client', None):
-                        worker_client = msg._client
-                        worker_name = getattr(worker_client, 'name', 'bot')
-                except Exception as msg_err:
-                    logger.warning('Error fetching message for worker %s: %s', worker_name, msg_err)
-                    mark_worker_cooldown(worker_name, 15)
-                    retry_count += 1
-                    await asyncio.sleep(0.5)
-                    continue
 
                 worker_yielded_any = False
                 try:
