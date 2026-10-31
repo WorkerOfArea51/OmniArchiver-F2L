@@ -81,15 +81,11 @@ async def prefetch_chunk(file_code: str, chunk_idx: int, total_chunks: int, targ
                     break
             except Exception as w_err:
                 logger.debug("Prefetch worker %s failed on chunk %d: %s", w_name, chunk_idx, w_err)
-                if hasattr(worker, 'media_sessions'):
-                    worker.media_sessions.clear()
                 mark_worker_cooldown(w_name, 60)
 
             if saved:
                 break
             else:
-                if hasattr(worker, 'media_sessions'):
-                    worker.media_sessions.clear()
                 mark_worker_cooldown(w_name, 60)
     except Exception as e:
         logger.debug("Prefetch background task exception for chunk %d: %s", chunk_idx, e)

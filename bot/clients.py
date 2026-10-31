@@ -69,6 +69,11 @@ def mark_worker_cooldown(worker_name: str, duration: float):
     _worker_cooldowns[worker_name] = time.time() + duration
     logger.warning("Worker %s placed on cooldown for %.1fs due to Telegram rate-limiting.", worker_name, duration)
 
+def is_worker_on_cooldown(worker_name: str) -> bool:
+    """Returns True if the worker is currently on cooldown."""
+    import time
+    return time.time() < _worker_cooldowns.get(worker_name, 0)
+
 def get_worker_client() -> Client:
     """Returns the next healthy worker client from the pool, skipping any currently on cooldown."""
     global _worker_cycler
