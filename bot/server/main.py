@@ -235,7 +235,8 @@ async def transmit_file(file_code):
         # Chunks N+1, N+2, N+3 are actively pre-fetching over independent MTProto sockets!
         # Eliminates cross-continental RTT bottlenecks, keeping player buffer 100% full.
         # -------------------------------------------------------------------------
-        CONCURRENCY = 4
+        all_pool = get_all_worker_clients() or [TelegramBot]
+        CONCURRENCY = min(6, max(4, len(all_pool)))
 
         async def fetch_chunk_data(target_chunk_idx: int) -> bytes:
             cached = await get_cached_chunk(file_code, target_chunk_idx, wait_in_flight=False)
@@ -243,7 +244,6 @@ async def transmit_file(file_code):
                 return cached
 
             # Filter healthy workers from pool
-            all_pool = get_all_worker_clients() or [TelegramBot]
             healthy = [w for w in all_pool if not is_worker_on_cooldown(getattr(w, 'name', ''))]
             if not healthy:
                 healthy = [TelegramBot]
@@ -270,11 +270,22 @@ async def transmit_file(file_code):
                     raise
                 except Exception as e:
                     err_name = type(e).__name__
-                    logger.warning('Worker %s failed on chunk %d (attempt %d/%d): %s',
-                                   worker_name, target_chunk_idx, attempt + 1, 4, err_name)
-                    mark_worker_cooldown(worker_name, 30)
+                    if isinstance(e, FloodWait):
+                        wait_sec = float(getattr(e, 'value', 30)) + 1.0
+                        logger.warning('Worker %s hit Telegram FloodWait on chunk %d (attempt %d/%d): waiting %.1fs',
+                                       worker_name, target_chunk_idx, attempt + 1, 4, wait_sec)
+                        mark_worker_cooldown(worker_name, wait_sec)
+                    elif isinstance(e, (ConnectionError, TimeoutError, asyncio.TimeoutError, OSError)):
+                        logger.info('Worker %s transient socket reset on chunk %d (attempt %d/%d): %s (cooling 2s)',
+                                    worker_name, target_chunk_idx, attempt + 1, 4, err_name)
+                        mark_worker_cooldown(worker_name, 2.0)
+                    else:
+                        logger.warning('Worker %s failed on chunk %d (attempt %d/%d): %s (cooling 4s)',
+                                       worker_name, target_chunk_idx, attempt + 1, 4, err_name)
+                        mark_worker_cooldown(worker_name, 4.0)
+
                     healthy = [w for w in all_pool if not is_worker_on_cooldown(getattr(w, 'name', ''))] or [TelegramBot]
-                    await asyncio.sleep(0.3)
+                    await asyncio.sleep(0.2)
                 finally:
                     if stream_iter is not None:
                         try:

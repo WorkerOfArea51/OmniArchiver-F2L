@@ -1,3 +1,4 @@
+from hydrogram.errors import FloodWait
 import os
 import asyncio
 from collections import OrderedDict
@@ -81,12 +82,15 @@ async def prefetch_chunk(file_code: str, chunk_idx: int, total_chunks: int, targ
                     break
             except Exception as w_err:
                 logger.debug("Prefetch worker %s failed on chunk %d: %s", w_name, chunk_idx, w_err)
-                mark_worker_cooldown(w_name, 60)
+                if isinstance(w_err, FloodWait):
+                    mark_worker_cooldown(w_name, float(getattr(w_err, 'value', 30)) + 1.0)
+                else:
+                    mark_worker_cooldown(w_name, 2.0)
 
             if saved:
                 break
             else:
-                mark_worker_cooldown(w_name, 60)
+                mark_worker_cooldown(w_name, 2.0)
     except Exception as e:
         logger.debug("Prefetch background task exception for chunk %d: %s", chunk_idx, e)
     finally:

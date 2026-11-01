@@ -71,10 +71,13 @@ def init_worker_clients():
 _worker_cooldowns: dict[str, float] = {}
 
 def mark_worker_cooldown(worker_name: str, duration: float):
-    """Temporarily marks a worker bot on cooldown if rate-limited by Telegram."""
+    """Temporarily marks a worker bot on cooldown if rate-limited by Telegram or recovering from a transient socket reset."""
     import time
     _worker_cooldowns[worker_name] = time.time() + duration
-    logger.warning("Worker %s placed on cooldown for %.1fs due to Telegram rate-limiting.", worker_name, duration)
+    if duration > 3.0:
+        logger.warning("Worker %s placed on cooldown for %.1fs due to Telegram rate-limiting.", worker_name, duration)
+    else:
+        logger.info("Worker %s transient cooldown for %.1fs.", worker_name, duration)
 
 def is_worker_on_cooldown(worker_name: str) -> bool:
     """Returns True if the worker is currently on cooldown."""
