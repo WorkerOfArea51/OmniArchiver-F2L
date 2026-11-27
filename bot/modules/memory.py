@@ -97,7 +97,7 @@ def get_current_ram_mb() -> float:
 
     return 0.0
 
-def check_memory_circuit_breaker(clean_threshold_mb: int = 420, restart_threshold_mb: int = 498, threshold_mb: int = None) -> bool:
+def check_memory_circuit_breaker(clean_threshold_mb: int = 400, restart_threshold_mb: int = 450, threshold_mb: int = None) -> bool:
     """
     Strict 500 MB Memory Guardian for Serv00 (512 MB host limit):
     1. At clean_threshold_mb (default 420 MB): Proactively runs cyclic GC,

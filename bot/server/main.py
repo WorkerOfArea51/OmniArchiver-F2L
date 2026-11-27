@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime
 from logging import getLogger
 from quart import Blueprint, Response, request, render_template, redirect, jsonify
 from math import ceil
@@ -130,6 +131,37 @@ async def transmit_file(file_code):
             msg = await get_message(channel_id, message_id, client=TelegramBot, force_refresh=True)
         if not msg:
             abort(503, 'Media message temporarily unavailable from Telegram.')
+
+        # On-the-fly Self-Healing: Detect if media file was replaced/swapped on Telegram
+        live_media = msg.video or msg.document or msg.audio
+        if live_media and live_media.file_size and live_media.file_size != file_size:
+            logger.warning(
+                f"[SelfHeal] Size mismatch for {file_code} (DB: {file_size} vs TG: {live_media.file_size}). Auto-healing!"
+            )
+            old_file_size = file_size
+            file_size = live_media.file_size
+            file_name = live_media.file_name or file_name
+
+            if end == old_file_size - 1 or end >= file_size:
+                end = file_size - 1
+            total_bytes_to_stream = end - start + 1
+            content_length = total_bytes_to_stream
+
+            async def _bg_heal(fc=file_code, ms=live_media.file_size, fn=file_name):
+                try:
+                    for cn in ('movies', 'anime', 'webseries', 'direct_files'):
+                        c = db.get_collection(cn)
+                        r = await c.update_one({'_id': fc}, {'$set': {'file_size': ms, 'file_name': fn, 'updated_at': datetime.utcnow()}})
+                        if r.matched_count:
+                            break
+                        r2 = await c.update_one({'episodes.code': fc}, {'$set': {'episodes.$.file_size': ms, 'episodes.$.file_name': fn, 'updated_at': datetime.utcnow()}})
+                        if r2.matched_count:
+                            break
+                    from bot.modules.cache import evict_file_chunks
+                    evict_file_chunks(fc)
+                except Exception as ex:
+                    logger.error(f"[SelfHeal] Failed to heal DB for {fc}: {ex}")
+            asyncio.create_task(_bg_heal())
     # Ensure a valid video MIME type so browsers stream inline instead of forcing a download
     if not mime_type or mime_type == 'application/octet-stream':
         if file_name and file_name.lower().endswith('.mkv'):
@@ -154,6 +186,8 @@ async def transmit_file(file_code):
         'Access-Control-Allow-Origin': '*',
         'Access-Control-Expose-Headers': 'Content-Range, Accept-Ranges, Content-Length',
         'X-Content-Type-Options': 'nosniff',
+        'X-Accel-Buffering': 'no',
+        'Cache-Control': 'no-cache, no-transform',
     }
     if range_header:
         headers['Content-Range'] = f'bytes {start}-{end}/{file_size}'
@@ -163,9 +197,9 @@ async def transmit_file(file_code):
         bytes_streamed = 0
         current_start = start
         offset = current_start // chunk_size
-        remaining_total = end - current_start + 1
-        chunks_needed = ceil(remaining_total / chunk_size)
         total_chunks = ceil(file_size / chunk_size)
+        end_chunk_target = (end // chunk_size) + 1
+        chunks_needed = end_chunk_target - offset
 
         curr_offset = offset
         curr_chunks_needed = chunks_needed
@@ -212,7 +246,7 @@ async def transmit_file(file_code):
         # Combined with TgCrypto hardware AES and 15MB Head SSD pre-caching, provides uninterrupted
         # 2-5+ MB/s throughput for 1080p/4K video playback and downloads!
         # -------------------------------------------------------------------------
-        end_chunk = curr_offset + curr_chunks_needed
+        end_chunk = end_chunk_target
         retry_count = 0
         MAX_RETRIES = 12
 
@@ -236,7 +270,8 @@ async def transmit_file(file_code):
         # Eliminates cross-continental RTT bottlenecks, keeping player buffer 100% full.
         # -------------------------------------------------------------------------
         all_pool = get_all_worker_clients() or [TelegramBot]
-        CONCURRENCY = min(6, max(4, len(all_pool)))
+        # Concurrency scales across all healthy workers (11 total: 1 main + 10 workers), capped at 16 for memory safety
+        CONCURRENCY = min(16, max(4, len(all_pool)))
 
         async def fetch_chunk_data(target_chunk_idx: int) -> bytes:
             cached = await get_cached_chunk(file_code, target_chunk_idx, wait_in_flight=False)
@@ -261,7 +296,7 @@ async def transmit_file(file_code):
                         w_msg = await get_message(channel_id, message_id, client=current_worker) or msg
 
                     stream_iter = current_worker.stream_media(w_msg, offset=target_chunk_idx, limit=1).__aiter__()
-                    chunk = await asyncio.wait_for(stream_iter.__anext__(), timeout=60.0)
+                    chunk = await asyncio.wait_for(stream_iter.__anext__(), timeout=12.0)
                     if chunk:
                         if is_head_or_tail(target_chunk_idx, total_chunks):
                             asyncio.create_task(put_cached_chunk(file_code, target_chunk_idx, chunk, total_chunks))
